@@ -24,9 +24,19 @@ class BibliotecaApp:
         
         # Criando um estilo personalizado para botões grandes e modernos
         # 'Grande.TButton' é o nome que inventamos para este estilo
-        self.style.configure('Grande.TButton', 
-                            font=("Helvetica", 14, "bold"), 
-                            padding=20) # O padding aumenta o tamanho interno do botão
+        # Criamos uma lista das cores que você usa para gerar os estilos grandes
+        # Lista de sufixos de cores do bootstrap
+        estilos_cores = ['primary', 'secondary', 'success', 'info', 'warning', 'danger','light', 'dark']
+
+        for cor in estilos_cores:
+            # Configura a versão SÓLIDA grande
+            self.style.configure(f'{cor}.TButton', font=("Helvetica", 14, "bold"), padding=20)
+            # Configura a versão OUTLINE (contorno) grande
+            self.style.configure(f'{cor}.Outline.TButton', font=("Helvetica", 14, "bold"), padding=20)
+
+        # Criamos um estilo NOVO para as outras telas (pequeno)
+        # Chamaremos de 'Colheita.TButton' ou qualquer nome para os botões normais
+        self.style.configure('Normal.TButton', font=("Helvetica", 10), padding=5)# O padding aumenta o tamanho interno do botão
         
         self.root.title("Sistema de Biblioteca - Tela Inicial")
         self.root.geometry("1000x700")
@@ -113,8 +123,9 @@ class BibliotecaApp:
             ("Inventário", self.tela_inventario, "📋", WARNING),      # LARANJA
             ("Gerenciar Livros", self.tela_livros, "📖", PRIMARY),     # AZUL ESCURO
             ("Gerenciar Clientes", self.tela_clientes, "👥", SECONDARY), # CINZA
-            ("Gerenciar Fornecedores", self.tela_fornecedores, "🚚", DANGER), # VERMELHO
+            ("Gerenciar Fornecedores", self.tela_fornecedores, "🚚", DARK), # Cinza Grafite / Preto
             ("Gerenciar Vendedores", self.tela_vendedores, "👔", INFO),   # AZUL
+            ("Sair do Sistema", self.sair_sistema, "❌", DANGER), # <-- NOVO BOTÃO
         ]
 
         row, col = 0, 0
@@ -124,8 +135,8 @@ class BibliotecaApp:
                 menu_frame, 
                 text=f"{icone}\n{texto}", 
                 command=comando,
-                style='Grande.TButton',     # Usa o estilo de fonte que criamos no __init__
-                bootstyle=f"{cor}-outline", # Se quiser o botão "cheio", use apenas bootstyle=cor
+                style=f'{cor.lower()}.Outline.TButton',    # Usa o estilo de fonte que criamos no __init__
+                #bootstyle=f"{cor}-outline", # Se quiser o botão "cheio", use apenas bootstyle=cor
                 cursor="hand2"
             )
             
@@ -1738,6 +1749,10 @@ class BibliotecaApp:
         for widget in self.root.winfo_children():
             if not isinstance(widget, tk.Menu):
                 widget.destroy()
+    
+    def sair_sistema(self):
+        if messagebox.askyesno("Sair", "Deseja realmente fechar o sistema?"):
+            self.root.destroy()
 
 if __name__ == "__main__":
     root = tk.Tk()
