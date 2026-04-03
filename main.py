@@ -125,6 +125,7 @@ class BibliotecaApp:
             ("Gerenciar Clientes", self.tela_clientes, "👥", SECONDARY), # CINZA
             ("Gerenciar Fornecedores", self.tela_fornecedores, "🚚", DARK), # Cinza Grafite / Preto
             ("Gerenciar Vendedores", self.tela_vendedores, "👔", INFO),   # AZUL
+            ("Devolução", self.tela_devolucao, "🔄", WARNING), # Laranja
             ("Sair do Sistema", self.sair_sistema, "❌", DANGER), # <-- NOVO BOTÃO
         ]
 
@@ -538,8 +539,8 @@ class BibliotecaApp:
         titulo_label.pack(pady=10)
 
         # Frame de entrada
-        entrada_frame = tb.LabelFrame(content_frame, text="Dados do Livro", padding=15)
-        entrada_frame.pack(fill=tk.X, padx=10, pady=10)
+        entrada_frame = tb.LabelFrame(content_frame, text="Dados do Livro")
+        entrada_frame.pack(fill=X, padx=10, pady=10, ipady=10, ipadx=10)
         
         # Dicionário para armazenar livros e seus dados - mapeia por TÍTULO
         livros_dict = {}
@@ -648,8 +649,8 @@ class BibliotecaApp:
         entrada_percentual.grid(row=4, column=1, padx=10, pady=5)
         
         # Frame de cálculos
-        calculo_frame = tb.LabelFrame(content_frame, text="Calculo Automatico", padding=15)
-        calculo_frame.pack(fill=tk.X, padx=10, pady=10)
+        calculo_frame = tb.LabelFrame(content_frame, text="Calculo Automatico")
+        calculo_frame.pack(fill=X, padx=10, pady=10, ipady=10, ipadx=10)
         
         tb.Label(calculo_frame, text="Preco Compra (R$):", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=5)
         label_preco_compra = tb.Label(calculo_frame, text="0.00", font=("Arial", 12, "bold"), foreground="green")
@@ -686,8 +687,8 @@ class BibliotecaApp:
         entrada_percentual.bind('<KeyRelease>', atualizar_calculos)
         
         # Frame de fornecedor
-        fornecedor_frame = tb.LabelFrame(content_frame, text="Fornecedor", padding=15)
-        fornecedor_frame.pack(fill=tk.X, padx=10, pady=10)
+        fornecedor_frame = tb.LabelFrame(content_frame, text="Fornecedor")
+        fornecedor_frame.pack(fill=X, padx=10, pady=10, ipady=10, ipadx=10)
         
         tb.Label(fornecedor_frame, text="Fornecedor:", font=("Arial", 10)).pack(anchor=tk.W, pady=5)
         fornecedores = self.fornecedor.listar()
@@ -881,7 +882,7 @@ class BibliotecaApp:
     def relatorio_vendas(self):
         self.limpar_janela()
         frame = tb.Frame(self.root)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10, ipady=10, ipadx=10)
 
         # Canvas + Scrollbar para garantir visibilidade em telas menores
         canvas = tk.Canvas(frame)
@@ -897,21 +898,19 @@ class BibliotecaApp:
 
         tb.Label(content_frame, text="Relatório de Vendas", font=("Arial", 18, "bold")).pack(pady=5)
 
-        filtro_frame = tb.LabelFrame(content_frame, text="Filtros", padding=10)
-        filtro_frame.pack(fill=tk.X, padx=5, pady=5)
+        filtro_frame = tb.LabelFrame(content_frame, text="Filtros")
+        filtro_frame.pack(fill=tk.X, padx=5, pady=5, ipady=5, ipadx=5)
 
-        # Data inicial
+        # Data inicial (Usando Entry comum para evitar o bug do DateEntry)
         tb.Label(filtro_frame, text="Data Início (DD/MM/YYYY):", font=("Arial", 9)).grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
-        date_var_ini = tk.StringVar()
-        entrada_data_ini = DateEntry(filtro_frame, width=15, date_pattern='dd/mm/yyyy', textvariable=date_var_ini)
-        date_var_ini.set('')  # Começar vazio
+        entrada_data_ini = tb.Entry(filtro_frame, width=15)
+        entrada_data_ini.insert(0, datetime.now().strftime('%d/%m/%Y')) # Sugere data de hoje
         entrada_data_ini.grid(row=0, column=1, padx=5, pady=3)
-
+        
         # Data final
         tb.Label(filtro_frame, text="Data Fim (DD/MM/YYYY):", font=("Arial", 9)).grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
-        date_var_fim = tk.StringVar()
-        entrada_data_fim = DateEntry(filtro_frame, width=15, date_pattern='dd/mm/yyyy', textvariable=date_var_fim)
-        date_var_fim.set('')  # Começar vazio
+        entrada_data_fim = tb.Entry(filtro_frame, width=15)
+        entrada_data_fim.insert(0, datetime.now().strftime('%d/%m/%Y'))
         entrada_data_fim.grid(row=0, column=3, padx=5, pady=3)
 
         # Forma de pagamento
@@ -947,10 +946,18 @@ class BibliotecaApp:
         botoes_filtro.pack(pady=5)
 
         def gerar_relatorio():
-            data_ini_str = entrada_data_ini.get().strip()
-            data_ini = datetime.strptime(data_ini_str, '%d/%m/%Y').strftime('%Y-%m-%d') if data_ini_str else None
-            data_fim_str = entrada_data_fim.get().strip()
-            data_fim = datetime.strptime(data_fim_str, '%d/%m/%Y').strftime('%Y-%m-%d') if data_fim_str else None
+            # Leia diretamente do widget usando .get()
+            data_ini_str = entrada_data_ini.get() 
+            data_fim_str = entrada_data_fim.get()
+            
+            # Converte para o formato do banco (YYYY-MM-DD)
+            try:
+                data_ini = datetime.strptime(data_ini_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+                data_fim = datetime.strptime(data_fim_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+            except:
+                data_ini = None
+                data_fim = None
+            
             status = entrada_status.get().strip() or None
             pagamento = entrada_pagamento.get().strip() or None
             cliente_id = int(cliente_combo.get().split(' - ')[0]) if cliente_combo.get() else None
@@ -1559,8 +1566,9 @@ class BibliotecaApp:
                  font=("Arial", 16, "bold"), foreground="green").pack()
         
         # Seção de métodos de pagamento
-        payment_frame = tb.LabelFrame(content_frame, text="Selecione o Método de Pagamento", padding=15)
-        payment_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        payment_frame = tb.LabelFrame(content_frame, text="Selecione o Método de Pagamento")
+        #payment_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        payment_frame.pack(fill=X, padx=10, pady=10, ipady=10, ipadx=10)
         
         metodo_var = tk.StringVar(value="PIX")
         
@@ -1753,6 +1761,126 @@ class BibliotecaApp:
     def sair_sistema(self):
         if messagebox.askyesno("Sair", "Deseja realmente fechar o sistema?"):
             self.root.destroy()
+    
+    def tela_devolucao(self):
+        self.limpar_janela()
+        frame = tb.Frame(self.root, padding=20)
+        frame.pack(fill=BOTH, expand=YES)
+
+        tb.Label(frame, text="🔄 Devolução de Livros", font=("Helvetica", 18, "bold")).pack(pady=10)
+
+        # Área de Busca de Venda
+        busca_frame = tb.LabelFrame(frame, text="Buscar Venda Original")
+        busca_frame.pack(fill=X, padx=10, pady=10, ipady=15, ipadx=10)
+
+        tb.Label(busca_frame, text="ID da Venda:").pack(side=LEFT, padx=5)
+        ent_venda_id = tb.Entry(busca_frame, width=15)
+        ent_venda_id.pack(side=LEFT, padx=5)
+
+        # Tabela para mostrar os itens daquela venda
+        tree_frame = tb.Frame(frame)
+        tree_frame.pack(fill=BOTH, expand=YES, padx=10, pady=10)
+
+        colunas = ("ID Item", "Livro", "Saldo", "Preço Unit.")
+        self.tree_itens_dev = tb.Treeview(tree_frame, columns=colunas, show="headings", bootstyle="info")
+        
+        for col in colunas:
+            self.tree_itens_dev.heading(col, text=col)
+            self.tree_itens_dev.column(col, anchor=W, width=150)
+            
+        scrollbar = tb.Scrollbar(tree_frame, orient=VERTICAL, command=self.tree_itens_dev.yview)
+        self.tree_itens_dev.configure(yscrollcommand=scrollbar.set)
+        self.tree_itens_dev.pack(fill=BOTH, expand=YES, side=LEFT)
+        scrollbar.pack(fill=Y, side=RIGHT)
+
+        def buscar_itens_venda():
+            # Limpa tabela
+            for i in self.tree_itens_dev.get_children(): self.tree_itens_dev.delete(i)
+            
+            v_id = ent_venda_id.get().strip()
+            # SQL Inteligente: Só traz itens onde ainda há saldo para devolver
+            # Filtro: quantidade (original) > quantidade_devolvida
+            query = """
+                SELECT 
+                    iv.id, 
+                    iv.livro_id, 
+                    l.titulo, 
+                    iv.quantidade, 
+                    iv.preco_unitario, 
+                    iv.quantidade_devolvida 
+                FROM itens_venda iv
+                JOIN livros l ON iv.livro_id = l.id
+                WHERE iv.venda_id = ? AND iv.quantidade > iv.quantidade_devolvida
+            """
+            itens = self.db.cursor.execute(query, (v_id,)).fetchall()
+            
+            if not itens:
+                messagebox.showinfo("Aviso", "Nenhum item encontrado para esta venda.")
+                return
+            
+            for item in itens:
+                    id_item = item[0]
+                    titulo = item[2]
+                    saldo_real = item[3] - item[5]
+                    preco = item[4]
+
+                    self.tree_itens_dev.insert("", END, values=(
+                    id_item, 
+                    titulo, 
+                    saldo_real, # Mostra na tela apenas o que ele PODE devolver
+                    f"R$ {preco:.2f}"
+                ))
+
+        tb.Button(busca_frame, text="🔍 Buscar Itens", command=buscar_itens_venda, style='Normal.TButton').pack(side=LEFT, padx=10)
+
+        # Botão de Ação
+        def processar_devolucao():
+            selecao = self.tree_itens_dev.selection()
+            if not selecao:
+                messagebox.showwarning("Aviso", "Selecione o livro que está sendo devolvido.")
+                return
+
+            valores = self.tree_itens_dev.item(selecao)['values']
+            id_item_venda = valores[0]
+            nome_livro = valores[1]
+            qtd_vendida = valores[2]
+
+            # Pergunta a quantidade a devolver
+            qtd_devolver = simpledialog.askinteger("Devolução", f"Quantas unidades de '{nome_livro}' deseja devolver?", 
+                                                minvalue=1, maxvalue=int(qtd_vendida))
+            
+            if qtd_devolver:
+                try:
+                    # 1. Recuperar o ID do Livro através do ID do Item da Venda
+                    # (Você precisará de uma query no banco para isso)
+                    res = self.db.cursor.execute("SELECT livro_id FROM itens_venda WHERE id=?", (id_item_venda,)).fetchone()
+                    livro_id = res[0]
+
+                    # 2. Atualizar Estoque
+                    sucesso, msg = self.livro.adicionar_estoque_por_id(livro_id, qtd_devolver)
+                    self.livro.adicionar_estoque_por_id(livro_id, qtd_devolver) # Use seu método de somar estoque
+                    if  sucesso:
+                        # 3. Registrar o controle de devolução no banco
+                        self.db.cursor.execute("""
+                            UPDATE itens_venda 
+                            SET quantidade_devolvida = quantidade_devolvida + ? 
+                            WHERE id = ?
+                        """, (qtd_devolver, id_item_venda))
+                        self.db.conexao.commit()
+
+                        messagebox.showinfo("Sucesso", f"{qtd_devolver} unidade(s) de '{nome_livro}' retornaram ao estoque.")
+                        buscar_itens_venda() # Atualiza a lista
+                    else:
+                        messagebox.showerror("Erro", msg)
+                    
+                except Exception as e:
+                    messagebox.showerror("Erro", f"Falha na devolução: {e}")
+
+        btn_frame = tb.Frame(frame)
+        btn_frame.pack(fill=X, pady=10)
+
+        tb.Button(btn_frame, text="✅ Confirmar Devolução", bootstyle=SUCCESS, command=processar_devolucao, style='Normal.TButton').pack(side=RIGHT, padx=10)
+        tb.Button(btn_frame, text="⬅ Voltar", command=self.criar_tela_inicial, style='Normal.TButton').pack(side=RIGHT)
 
 if __name__ == "__main__":
     root = tk.Tk()
