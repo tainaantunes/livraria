@@ -94,7 +94,7 @@ class Venda:
     def listar_itens_venda(self, venda_id):
         """Listar itens de uma venda específica"""
         self.db.cursor.execute('''
-            SELECT iv.id, iv.livro_id, l.titulo, iv.quantidade, iv.preco_unitario, iv.subtotal
+            SELECT iv.id, iv.livro_id, l.titulo, iv.quantidade, iv.preco_unitario, iv.subtotal, iv.quantidade_devolvida
             FROM itens_venda iv
             JOIN livros l ON iv.livro_id = l.id
             WHERE iv.venda_id = ?

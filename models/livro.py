@@ -121,3 +121,24 @@ class Livro:
         except Exception as e:
             return False, f"Erro ao limpar inventário temporário: {str(e)}"
 
+    def adicionar_estoque_por_id(self, id, quantidade_a_somar):
+        """Soma uma quantidade ao estoque atual do livro"""
+        try:
+            # Primeiro pegamos a quantidade atual
+            self.db.cursor.execute('SELECT quantidade FROM livros WHERE id=?', (id,))
+            atual = self.db.cursor.fetchone()
+            if atual:
+                nova_qtd = atual[0] + int(quantidade_a_somar)
+                self.db.cursor.execute('UPDATE livros SET quantidade=? WHERE id=?', (nova_qtd, id))
+                self.db.conexao.commit()
+                return True, f"Estoque atualizado: {nova_qtd} unidades."
+            return False, "Livro não encontrado."
+        except Exception as e:
+            return False, f"Erro ao somar estoque: {str(e)}"    
+    
+    def devolver_ao_estoque(self, livro_id, quantidade):
+        self.db.cursor.execute(
+            "UPDATE livros SET quantidade = quantidade + ? WHERE id = ?",
+            (quantidade, livro_id)
+        )
+        self.db.conexao.commit()
