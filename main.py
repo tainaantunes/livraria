@@ -57,13 +57,25 @@ class BibliotecaApp:
         self.criar_tela_inicial()
     
     def carregar_icones_pagamento(self):
-        """Carrega os ícones dos métodos de pagamento"""
+        """Carrega os ícones dos métodos de pagamento (Compatível com .exe)"""
+        import sys
+        
+        # Lógica para encontrar o caminho das imagens no .exe ou no script
+        if getattr(sys, 'frozen', False):
+            # Se for executável, o PyInstaller extrai tudo para sys._MEIPASS
+            base_path = sys._MEIPASS
+        else:
+            # Se estiver rodando o .py normal, usa o caminho atual
+            base_path = os.path.abspath(".")
+            
         self.icones_pagamento = {}
+        
+        # Mapeamos os nomes para os caminhos usando os.path.join para evitar erros de barra / ou \
         icones_paths = {
-            'PIX': 'images/pix.png',
-            'CARTAO DE DEBITO': 'images/debito.png',
-            'CARTAO DE CREDITO': 'images/credito.png',
-            'DINHEIRO': 'images/dinheiro.png'
+            'PIX': os.path.join(base_path, 'images', 'pix.png'),
+            'CARTAO DE DEBITO': os.path.join(base_path, 'images', 'debito.png'),
+            'CARTAO DE CREDITO': os.path.join(base_path, 'images', 'credito.png'),
+            'DINHEIRO': os.path.join(base_path, 'images', 'dinheiro.png')
         }
         
         for metodo, path in icones_paths.items():
@@ -73,7 +85,8 @@ class BibliotecaApp:
                     img = img.resize((32, 32), Image.Resampling.LANCZOS)
                     self.icones_pagamento[metodo] = ImageTk.PhotoImage(img)
                 else:
-                    # Fallback para emoji se imagem não existir
+                    # Se o arquivo não existir no caminho especificado
+                    print(f"Aviso: Ícone não encontrado em {path}")
                     self.icones_pagamento[metodo] = None
             except Exception as e:
                 print(f"Erro ao carregar ícone {metodo}: {e}")
