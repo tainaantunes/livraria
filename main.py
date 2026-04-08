@@ -12,11 +12,14 @@ from models.vendedor import Vendedor
 from models.venda import Venda
 from PIL import Image, ImageTk
 import os
+import xml.etree.ElementTree as ET
+from tkinter import filedialog
 
 
 class BibliotecaApp:
     def __init__(self, root):
         self.root = root
+        self.root.state('zoomed') # Abre a janela ocupando a tela toda
         
         # --- AQUI É ONDE A MÁGICA ACONTECE ---
         # Escolha um tema: 'cosmo', 'flatly', 'darkly' (escuro), 'superhero'
@@ -109,6 +112,7 @@ class BibliotecaApp:
         menu_modulos.add_command(label="Vendedores", command=self.tela_vendedores)
         menu_modulos.add_command(label="Vendas", command=self.tela_vendas)
         menu_modulos.add_command(label="Inventário", command=self.tela_inventario)
+        menu_modulos.add_command(label="Importar Nota XML", command=self.tela_importar_xml)
     
     def criar_tela_inicial(self):
         self.limpar_janela()
@@ -118,7 +122,7 @@ class BibliotecaApp:
 
         # Título do Sistema
         tb.Label(main_frame, text="📚 SISTEMA LIVRARIA PRO", 
-                font=("Helvetica", 28, "bold"), bootstyle="primary").pack(pady=(0, 40))
+                font=("Helvetica", 45, "bold"), bootstyle="primary").pack(pady=(0, 40))
 
         menu_frame = tb.Frame(main_frame)
         menu_frame.pack(fill=BOTH, expand=YES)
@@ -134,6 +138,7 @@ class BibliotecaApp:
             ("Registrar Venda", self.tela_vendas, "💰", SUCCESS),     # VERDE
             ("Entrada de Livros", self.tela_entrada_livros, "📥", INFO), # AZUL
             ("Inventário", self.tela_inventario, "📋", WARNING),      # LARANJA
+            ("Importar Nota XML", self.tela_importar_xml, "�", DARK),   # Cinza escuro
             ("Gerenciar Livros", self.tela_livros, "📖", PRIMARY),     # AZUL ESCURO
             ("Gerenciar Clientes", self.tela_clientes, "👥", SECONDARY), # CINZA
             ("Gerenciar Fornecedores", self.tela_fornecedores, "🚚", DARK), # Cinza Grafite / Preto
@@ -173,7 +178,7 @@ class BibliotecaApp:
                             self.adicionar_cliente, self.editar_cliente, 
                             self.deletar_cliente, self.atualizar_lista_clientes)
     
-    def tela_livros(self):
+    def tela_livros(self):        
         dados = self.livro.listar()
         colunas = ["ID", "Titulo", "Autor", "Espirito", "ISBN", "Qtd", "Preco Compra", "Preco Venda", "Fornecedor"]
         self.criar_tela_crud("Livros", dados, colunas,
@@ -222,24 +227,39 @@ class BibliotecaApp:
         tb.Button(botoes, text="Atualizar", command=refresh_func).pack(side=tk.LEFT, padx=5)
         tb.Button(botoes, text="Voltar", command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=5)
         
-        # Treeview
-        self.tree = tb.Treeview(content_frame, columns=colunas, height=15)
+        # Container para a Treeview e suas próprias scrollbars
+        tree_container = tb.Frame(content_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+
+        self.tree = tb.Treeview(tree_container, columns=colunas, height=15)
+        
+        # Scrollbar Vertical da Treeview
+        vsb = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
+        # Scrollbar Horizontal da Treeview (PARA NÃO CORTAR CAMPOS)
+        hsb = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        # Posicionamento da Treeview e Barras
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+
+        # Configura o peso para expandir
+        tree_container.grid_columnconfigure(0, weight=1)
+        tree_container.grid_rowconfigure(0, weight=1)
+
         self.tree.column("#0", width=0, stretch=tk.NO)
         for col in colunas:
-            self.tree.column(col, anchor=tk.W, width=120)
+            # minwidth garante que o campo não suma, width define o inicial
+            self.tree.column(col, anchor=tk.W, width=150, minwidth=100, stretch=True)
             self.tree.heading(col, text=col, anchor=tk.W)
-        
-        scrollbar_tree = tb.Scrollbar(content_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        self.tree.configure(yscroll=scrollbar_tree.set)
-        scrollbar_tree.pack(side=tk.RIGHT, fill=tk.Y)
         
         for item in dados:
             self.tree.insert("", "end", values=item[:len(colunas)])
         
-        self.tree.pack(fill=tk.BOTH, expand=True)
-        
         self.refresh_func = refresh_func
-    
+
     def adicionar_cliente(self):
         self.janela_formulario("Adicionar Cliente", 
                               [("Nome", "entry", ""), ("Email", "entry", ""), 
@@ -794,7 +814,6 @@ class BibliotecaApp:
         
         tb.Button(botoes_frame, text="Salvar Entrada", command=salvar_entrada).pack(side=tk.LEFT, padx=5)
         tb.Button(botoes_frame, text="Voltar", command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=5)
-
     
     def adicionar_fornecedor(self):
         self.janela_formulario("Adicionar Fornecedor",
@@ -1892,8 +1911,200 @@ class BibliotecaApp:
         btn_frame = tb.Frame(frame)
         btn_frame.pack(fill=X, pady=10)
 
-        tb.Button(btn_frame, text="✅ Confirmar Devolução", bootstyle=SUCCESS, command=processar_devolucao, style='Normal.TButton').pack(side=RIGHT, padx=10)
+        tb.Button(btn_frame, text="✅ Confirmar Devolução", bootstyle=SUCCESS, command=processar_devolucao, style='Normal.TButton').pack(side=LEFT, padx=10)
         tb.Button(btn_frame, text="⬅ Voltar", command=self.criar_tela_inicial, style='Normal.TButton').pack(side=RIGHT)
+    
+    def tela_importar_xml(self):
+        import xml.etree.ElementTree as ET
+        from tkinter import filedialog
+
+        self.limpar_janela()        
+        frame = tb.Frame(self.root, padding=20)
+        frame.pack(fill=BOTH, expand=YES)
+
+        tb.Label(frame, text="📥 Importar Nota Fiscal XML", font=("Helvetica", 18, "bold")).pack(pady=10)
+
+        # --- TABELA ---
+        colunas = ("Livro", "ISBN", "Qtd", "V. Unit", "% Desc", "P. Compra", "P. Venda")
+        self.tree_xml = tb.Treeview(frame, columns=colunas, show="headings", bootstyle="primary")
+        
+        for col in colunas:
+            self.tree_xml.heading(col, text=col)
+            self.tree_xml.column(col, width=120, anchor=CENTER)
+        
+        # Ajuste específico para o nome do livro ser maior
+        self.tree_xml.column("Livro", width=250, anchor=W)
+        self.tree_xml.pack(fill=BOTH, expand=YES, pady=20)
+
+        # --- LÓGICA DE EDIÇÃO NO GRID ---
+        def on_double_click(event):
+            """ Abre um campo de edição na célula clicada """
+            item = self.tree_xml.identify_row(event.y)
+            column = self.tree_xml.identify_column(event.x)
+            
+            if not item: return
+            
+            # Descobrir o índice da coluna
+            col_idx = int(column.replace('#', '')) - 1
+            x, y, width, height = self.tree_xml.bbox(item, column)
+            
+            # Pegar o valor atual
+            valores_atuais = self.tree_xml.item(item)['values']
+            value_atual = valores_atuais[col_idx]
+            
+            # Criar o campo de entrada (Entry) usando o tk padrão para evitar conflitos de estilo
+            # Forçamos fundo branco e texto preto para garantir visibilidade
+            entry = tk.Entry(self.tree_xml, bg="white", fg="black", insertbackground="black")
+            entry.insert(0, value_atual)
+            entry.place(x=x, y=y, width=width, height=height)
+            
+            entry.focus_set()
+            entry.select_range(0, tk.END) # Seleciona o texto para facilitar a troca
+
+            def salvar_edicao(event=None):
+                novo_valor = entry.get()
+                novos_valores = list(self.tree_xml.item(item)['values'])
+                novos_valores[col_idx] = novo_valor
+                self.tree_xml.item(item, values=novos_valores)
+                entry.destroy()
+            
+            # Atalhos de teclado
+            entry.bind('<Return>', salvar_edicao)
+            entry.bind('<Tab>', salvar_edicao)     # TAB também confirma e salva
+            entry.bind('<Escape>', lambda e: entry.destroy())
+            entry.bind('<FocusOut>', lambda e: entry.destroy())
+
+        self.tree_xml.bind("<Double-1>", on_double_click)
+
+        def selecionar_e_processar():
+            caminho = filedialog.askopenfilename(filetypes=[("XML", "*.xml")])
+            if not caminho: return
+
+            try:
+                tree = ET.parse(caminho)
+                root = tree.getroot()
+                ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
+                
+                for i in self.tree_xml.get_children(): self.tree_xml.delete(i)
+
+                for det in root.findall('.//nfe:det', ns):
+                    prod = det.find('nfe:prod', ns)
+                    
+                    xProd = prod.find('nfe:xProd', ns).text
+                    nome_livro = xProd.split('-')[0].strip()
+                    isbn = prod.find('nfe:cEAN', ns).text if prod.find('nfe:cEAN', ns) is not None else "N/A"
+
+                    qtd = float(prod.find('nfe:qCom', ns).text)
+                    v_unit_bruto = float(prod.find('nfe:vUnCom', ns).text)
+                    v_prod_total = float(prod.find('nfe:vProd', ns).text)
+                    v_desc_total = float(prod.find('nfe:vDesc', ns).text) if prod.find('nfe:vDesc', ns) is not None else 0
+                    
+                    percentual_desc = (v_desc_total / v_prod_total) * 100 if v_prod_total > 0 else 0
+                    preco_compra = v_unit_bruto * (1 - (percentual_desc / 100))
+                    
+                    # --- REGRA DE PREÇO COM ARREDONDAMENTO ---
+                    if preco_compra < 31:
+                        preco_venda = preco_compra + 10
+                    else:
+                        preco_venda = preco_compra * 1.20
+                    
+                    # Arredondamento para 2 casas decimais
+                    preco_venda = round(preco_venda, 2)
+                    
+                    self.tree_xml.insert("", END, values=(
+                        nome_livro,
+                        isbn,
+                        int(qtd),
+                        f"{v_unit_bruto:.2f}",
+                        f"{percentual_desc:.1f}",
+                        f"{preco_compra:.2f}",
+                        f"{preco_venda:.2f}"
+                    ))
+                
+                messagebox.showinfo("Sucesso", "Nota XML processada. Você pode editar os valores clicando duas vezes nas células.")
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao ler XML: {e}")
+
+        # Botões de Ação
+        btn_frame = tb.Frame(frame)
+        btn_frame.pack(fill=X, pady=5)
+
+        tb.Button(btn_frame, text="📂 Abrir Arquivo XML", bootstyle=INFO, command=selecionar_e_processar).pack(side=LEFT, padx=10)
+        tb.Button(btn_frame, text="❌ Remover Item", bootstyle=DANGER, command=self.remover_item_xml).pack(side=LEFT, padx=5)
+        tb.Button(btn_frame, text="⬅ Voltar", bootstyle=SECONDARY, command=self.criar_tela_inicial).pack(side=RIGHT, padx=5)
+        tb.Button(btn_frame, text="💾 Gravar no Banco", bootstyle=SUCCESS, command=self.gravar_livros_xml).pack(side=RIGHT, padx=5)
+    
+    def gravar_livros_xml(self):
+        """ Percorre a Grid do XML e salva os dados no Banco de Dados """
+        itens = self.tree_xml.get_children()
+        
+        if not itens:
+            messagebox.showwarning("Aviso", "Não há dados na tabela para gravar.")
+            return
+
+        if not messagebox.askyesno("Confirmar", f"Deseja importar {len(itens)} itens para o banco de dados?"):
+            return
+
+        sucessos = 0
+        erros = 0
+
+        for item_id in itens:
+            # Pegar valores da linha (respeitando as edições que você fez)
+            valores = self.tree_xml.item(item_id)['values']
+            
+            titulo = str(valores[0])
+            isbn = str(valores[1])
+            quantidade = int(valores[2])
+            preco_compra = float(str(valores[5]).replace("R$", "").strip())
+            preco_venda = float(str(valores[6]).replace("R$", "").strip())
+
+            try:
+                # 1. Verificar se o livro já existe pelo ISBN
+                self.db.cursor.execute("SELECT id, quantidade FROM livros WHERE isbn = ?", (isbn,))
+                resultado = self.db.cursor.fetchone()
+
+                if resultado:
+                    # Se existe, atualiza o estoque somando a nova quantidade
+                    livro_id, qtd_atual = resultado
+                    nova_qtd = qtd_atual + quantidade
+                    self.db.cursor.execute("""
+                        UPDATE livros 
+                        SET quantidade = ?, preco_compra = ?, preco_venda = ? 
+                        WHERE id = ?
+                    """, (nova_qtd, preco_compra, preco_venda, livro_id))
+                else:
+                    # Se não existe, cadastra como novo livro
+                    # Deixamos Autor e Espírito como "Importado XML" ou vazio
+                    self.db.cursor.execute("""
+                        INSERT INTO livros (titulo, autor, isbn, quantidade, preco_compra, preco_venda, espirito, data_cadastro)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (titulo, "Importado XML", isbn, quantidade, preco_compra, preco_venda, "N/A", datetime.now().isoformat()))
+                
+                sucessos += 1
+            except Exception as e:
+                print(f"Erro ao gravar item {titulo}: {e}")
+                erros += 1
+
+        self.db.conexao.commit()
+        
+        if erros == 0:
+            messagebox.showinfo("Sucesso", f"{sucessos} livros foram processados com sucesso!")
+            self.tree_xml.delete(*self.tree_xml.get_children()) # Limpa a grid após salvar
+        else:
+            messagebox.showwarning("Concluído com Alertas", f"Sucesso: {sucessos}\nErros: {erros}\nVerifique o console para detalhes.")
+
+    def remover_item_xml(self):
+        """Remove a linha selecionada no grid de importação XML"""
+        selecionado = self.tree_xml.selection()
+        
+        if not selecionado:
+            messagebox.showwarning("Aviso", "Por favor, selecione um item na tabela para remover.")
+            return
+        
+        # Pergunta para confirmar a remoção apenas do grid
+        if messagebox.askyesno("Confirmar", "Deseja remover este item da lista de importação?"):
+            for item in selecionado:
+                self.tree_xml.delete(item)
 
 if __name__ == "__main__":
     root = tk.Tk()
