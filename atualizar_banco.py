@@ -1,27 +1,52 @@
 import sqlite3
 
-def atualizar_banco():
+def limpar_dados_preservando_cadastros():
+    """
+    Remove dados de movimentação (vendas, itens, estoque e inventário)
+    Mantém: Clientes, Fornecedores e Vendedores.
+    """
     try:
-        # Conecta ao seu arquivo de banco de dados
         conexao = sqlite3.connect('biblioteca.db')
         cursor = conexao.cursor()
 
-        # Comando para adicionar a nova coluna de controle de devolução
-        # O 'DEFAULT 0' garante que todos os itens antigos comecem com zero devolvidos
-        cursor.execute("ALTER TABLE itens_venda ADD COLUMN quantidade_devolvida INTEGER DEFAULT 0")
+        print("Refinando banco de dados... Aguarde.")
+
+        # 1. Desativar chaves estrangeiras temporariamente para evitar erros de restrição
+        cursor.execute("PRAGMA foreign_keys = OFF")
+
+        # 2. Lista de tabelas para limpar (ordem importa se as chaves estivessem ON)
+        tabelas_para_limpar = [
+            'itens_venda',
+            'vendas',
+            'inventario_temp',
+            'inventario_historico',
+            'livros' # Livros costumam estar ligados a notas fiscais/estoque
+        ]
+
+        for tabela in tabelas_para_limpar:
+            try:
+                cursor.execute(f"DELETE FROM {tabela}")
+                # Reinicia o contador de ID (autoincrement) para começar do 1 novamente
+                cursor.execute(f"DELETE FROM sqlite_sequence WHERE name='{tabela}'")
+                print(f"✔️ Dados da tabela '{tabela}' removidos.")
+            except sqlite3.OperationalError as e:
+                print(f"⚠️ Tabela '{tabela}' não encontrada ou já limpa.")
+
+        # 3. Reativar chaves estrangeiras
+        cursor.execute("PRAGMA foreign_keys = ON")
 
         conexao.commit()
-        print("✅ Coluna 'quantidade_devolvida' adicionada com sucesso!")
+        print("\n✅ Limpeza concluída! Cadastros de Clientes, Fornecedores e Vendedores foram preservados.")
         
-    except sqlite3.OperationalError as e:
-        if "duplicate column name" in str(e).lower():
-            print("⚠️ A coluna já existe no banco de dados.")
-        else:
-            print(f"❌ Erro operacional: {e}")
     except Exception as e:
-        print(f"❌ Ocorreu um erro: {e}")
+        print(f"❌ Erro ao limpar banco: {e}")
     finally:
         conexao.close()
 
 if __name__ == "__main__":
-    atualizar_banco()
+    # Pergunta de segurança para não rodar por engano
+    confirmacao = input("⚠️ Isso apagará todos os Livros e Vendas. Clientes/Fornecedores serão mantidos. Digite 'SIM' para continuar: ")
+    if confirmacao.upper() == "SIM":
+        limpar_dados_preservando_cadastros()
+    else:
+        print("Operação cancelada.")

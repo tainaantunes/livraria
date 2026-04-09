@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 ; Non-commercial use only
 
-#define MyAppName "Livravria_GEF"
+#define MyAppName "Livraria_GEF"
 #define MyAppVersion "1.5"
 #define MyAppPublisher "My Company, Inc."
 #define MyAppURL "https://www.example.com/"
@@ -49,7 +49,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "C:\Users\taina\Downloads\biblioteca\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "C:\Users\taina\Downloads\biblioteca\biblioteca.db"; DestDir: "{app}"; Flags: ignoreversion
+Source: "C:\Users\taina\Downloads\biblioteca\biblioteca.db"; DestDir: "{app}"; Flags: uninsneveruninstall onlyifdoesntexist
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Registry]
@@ -65,3 +65,5 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
+[Dirs]
+Name: "{app}"; Permissions: users-modify

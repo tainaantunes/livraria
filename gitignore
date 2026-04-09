@@ -1,0 +1,17 @@
+# --- Arquivos específicos solicitados ---
+*.txt
+Setup.iss
+*.pyc
+
+# --- Pastas de compilação e temporários do Python ---
+__pycache__/
+build/
+*.spec
+
+# --- Bancos de dados (Opcional) ---
+# Descomente a linha abaixo se não quiser subir seu banco de teste
+# *.db
+
+# --- Arquivos de ambiente virtual ---
+venv/
+.env
