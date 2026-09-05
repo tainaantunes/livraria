@@ -4,23 +4,23 @@ class Livro:
     def __init__(self, db):
         self.db = db
     
-    def adicionar(self, titulo, autor, isbn, quantidade, preco_compra, preco_venda, espirito, fornecedor_id):
+    def adicionar(self, titulo, autor, isbn, quantidade, preco_compra, preco_venda, espirito, fornecedor_id, categoria=None):
         try:
             self.db.cursor.execute('''
-                INSERT INTO livros (titulo, autor, isbn, quantidade, preco_compra, preco_venda, espirito, fornecedor_id, data_cadastro)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (titulo, autor, isbn, int(quantidade), float(preco_compra), float(preco_venda), espirito, int(fornecedor_id) if fornecedor_id else None, datetime.now().isoformat()))
+                INSERT INTO livros (titulo, autor, categoria, isbn, quantidade, preco_compra, preco_venda, espirito, fornecedor_id, data_cadastro)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (titulo, autor, categoria, isbn, int(quantidade), float(preco_compra), float(preco_venda), espirito, int(fornecedor_id) if fornecedor_id else None, datetime.now().isoformat()))
             self.db.conexao.commit()
             return True, "Livro adicionado com sucesso!"
         except Exception as e:
             return False, f"Erro ao adicionar livro: {str(e)}"
     
-    def atualizar(self, id, titulo, autor, isbn, quantidade, preco_compra, preco_venda, espirito, fornecedor_id):
+    def atualizar(self, id, titulo, autor, isbn, quantidade, preco_compra, preco_venda, espirito, fornecedor_id, categoria=None):
         try:
             self.db.cursor.execute('''
-                UPDATE livros SET titulo=?, autor=?, isbn=?, quantidade=?, preco_compra=?, preco_venda=?, espirito=?, fornecedor_id=?
+                UPDATE livros SET titulo=?, autor=?, categoria=?, isbn=?, quantidade=?, preco_compra=?, preco_venda=?, espirito=?, fornecedor_id=?
                 WHERE id=?
-            ''', (titulo, autor, isbn, int(quantidade), float(preco_compra), float(preco_venda), espirito, int(fornecedor_id) if fornecedor_id else None, id))
+            ''', (titulo, autor, categoria, isbn, int(quantidade), float(preco_compra), float(preco_venda), espirito, int(fornecedor_id) if fornecedor_id else None, id))
             self.db.conexao.commit()
             return True, "Livro atualizado com sucesso!"
         except Exception as e:

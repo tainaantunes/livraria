@@ -12,8 +12,12 @@ from models.vendedor import Vendedor
 from models.venda import Venda
 from PIL import Image, ImageTk
 import os
+import sys
+import shutil
+import stat
 import xml.etree.ElementTree as ET
 from tkinter import filedialog
+from migrations import atualizar_banco
 
 
 class BibliotecaApp:
@@ -47,6 +51,40 @@ class BibliotecaApp:
         
         # Inicializar banco de dados
         self.db = DatabaseBiblioteca()
+
+        # --- Backup automático antes de qualquer atualização de banco ---
+        try:
+            if getattr(sys, 'frozen', False):
+                base_path = os.path.dirname(sys.executable)
+            else:
+                base_path = os.path.abspath(".")
+            caminho_db = os.path.join(base_path, "biblioteca.db")
+
+            # Garante que o arquivo não está marcado como "somente leitura"
+            # (pode acontecer se o banco veio de um backup, pendrive, OneDrive etc.)
+            if os.path.exists(caminho_db):
+                try:
+                    os.chmod(caminho_db, stat.S_IWRITE | stat.S_IREAD)
+                except Exception as e:
+                    print(f"Aviso: não foi possível ajustar permissões do banco: {e}")
+
+            if os.path.exists(caminho_db):
+                backup = os.path.join(
+                    base_path,
+                    f"biblioteca_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+                )
+                shutil.copy2(caminho_db, backup)
+        except Exception as e:
+            print(f"Aviso: não foi possível gerar backup automático: {e}")
+
+        # --- Aplica migrações pendentes no banco (adiciona colunas/tabelas novas) ---
+        try:
+            atualizar_banco(self.db.conexao, self.db.cursor)
+        except Exception as e:
+            messagebox.showerror("Erro na atualização do banco", str(e))
+            self.root.destroy()
+            return
+
         self.cliente = Cliente(self.db)
         self.livro = Livro(self.db)
         self.fornecedor = Fornecedor(self.db)
@@ -112,6 +150,7 @@ class BibliotecaApp:
         menu_modulos.add_command(label="Vendedores", command=self.tela_vendedores)
         menu_modulos.add_command(label="Vendas", command=self.tela_vendas)
         menu_modulos.add_command(label="Inventário", command=self.tela_inventario)
+        menu_modulos.add_command(label="Relatórios", command=self.tela_relatorios)
         menu_modulos.add_command(label="Importar Nota XML", command=self.tela_importar_xml)
     
     def criar_tela_inicial(self):
@@ -141,13 +180,15 @@ class BibliotecaApp:
             ("Importar Nota XML", self.tela_importar_xml, "�", DARK),   # Cinza escuro
             ("Gerenciar Livros", self.tela_livros, "📖", PRIMARY),     # AZUL ESCURO
             ("Gerenciar Clientes", self.tela_clientes, "👥", SECONDARY), # CINZA
-            ("Gerenciar Fornecedores", self.tela_fornecedores, "🚚", DARK), # Cinza Grafite / Preto
-            ("Gerenciar Vendedores", self.tela_vendedores, "👔", INFO),   # AZUL
-            ("Devolução", self.tela_devolucao, "🔄", WARNING), # Laranja
-            ("Sair do Sistema", self.sair_sistema, "❌", DANGER), # <-- NOVO BOTÃO
+            ("Gerenciar Fornecedores", self.tela_fornecedores, "🚚", SUCCESS), # Cinza Grafite / Preto
+            ("Relatórios", self.tela_relatorios, "📊", INFO),       # Relatórios abaixo de Fornecedores
+            ("Gerenciar Vendedores", self.tela_vendedores, "👔", WARNING),   # AZUL
+            ("Devolução", self.tela_devolucao, "🔄", DARK), # Laranja
+            ("Sair do Sistema", self.sair_sistema, "❌", DANGER), # Botão ficará alinhado à direita
         ]
 
         row, col = 0, 0
+        sair_btn = None
         for texto, comando, icone, cor in menu_itens:
             # Criando o botão com a cor específica da iteração atual
             btn = tb.Button(
@@ -167,37 +208,316 @@ class BibliotecaApp:
                 col = 0
                 row += 1
 
+            # keep reference to the Sair button so we can reposition it to the right
+            if texto == "Sair do Sistema":
+                sair_btn = btn
+
         # Faz com que as linhas também estiquem se a janela crescer
         for r in range(row + 1):
             menu_frame.rowconfigure(r, weight=1)
+
+        # Reposicionar o botão 'Sair do Sistema' para a coluna mais à direita
+        if sair_btn:
+            sair_btn.grid_forget()
+            # garante que esteja na última linha, coluna 2 (direita)
+            sair_btn.grid(row=row, column=2, padx=15, pady=15, sticky="nsew")
     
     def tela_clientes(self):
-        dados = self.cliente.listar()
+        self.limpar_janela()
         colunas = ["ID", "Nome", "Email", "Telefone", "Endereco"]
-        self.criar_tela_crud("Clientes", dados, colunas, 
-                            self.adicionar_cliente, self.editar_cliente, 
-                            self.deletar_cliente, self.atualizar_lista_clientes)
+
+        frame = tb.Frame(self.root)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        # --- TÍTULO ---
+        tb.Label(frame, text="Gerenciar Clientes", font=("Arial", 20, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 15))
+
+        # --- BOTÕES HORIZONTAIS ---
+        botoes_frame = tb.Frame(frame)
+        botoes_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        
+        tb.Button(botoes_frame, text="Adicionar", bootstyle=PRIMARY, 
+                 command=self.adicionar_cliente).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Editar", bootstyle=PRIMARY,
+                 command=self.editar_cliente).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Deletar", bootstyle=DANGER,
+                 command=self.deletar_cliente).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Atualizar", bootstyle=PRIMARY,
+                 command=self.atualizar_lista_clientes).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Voltar", bootstyle=SECONDARY,
+                 command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=3)
+
+        # --- TREEVIEW COM SCROLLBARS ---
+        tree_container = tb.Frame(frame)
+        tree_container.grid(row=2, column=0, sticky=tk.NSEW)
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
+
+        self.tree = tb.Treeview(tree_container, columns=colunas, show="headings", height=20)
+        
+        style = tb.Style()
+        style.configure("Treeview", font=("Arial", 11), rowheight=25)
+        style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+
+        vsb = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        self.tree.column("#0", width=0, stretch=tk.NO)
+        for col in colunas:
+            self.tree.column(col, anchor=tk.W, width=150, minwidth=100, stretch=True)
+            self.tree.heading(col, text=col, anchor=tk.W)
+
+        dados = self.cliente.listar()
+        for i, item in enumerate(dados):
+            tag = "par" if i % 2 == 0 else "impar"
+            self.tree.insert("", "end", values=item[:len(colunas)], tags=(tag,))
+
+        self.refresh_func = self.atualizar_lista_clientes
     
-    def tela_livros(self):        
-        dados = self.livro.listar()
-        colunas = ["ID", "Titulo", "Autor", "Espirito", "ISBN", "Qtd", "Preco Compra", "Preco Venda", "Fornecedor"]
-        self.criar_tela_crud("Livros", dados, colunas,
-                            self.adicionar_livro, self.editar_livro,
-                            self.deletar_livro, self.atualizar_lista_livros)
+    # def tela_livros(self):        
+    #     dados = self.livro.listar()
+    #     colunas = ["ID", "Titulo", "Autor", "Espirito", "ISBN", "Qtd", "Preco Compra", "Preco Venda", "Fornecedor"]
+    #     self.criar_tela_crud("Livros", dados, colunas,
+    #                         self.adicionar_livro, self.editar_livro,
+    #                         self.deletar_livro, self.atualizar_lista_livros)
+
+    def tela_livros(self):
+        self.limpar_janela()
+        colunas = ["ID", "Titulo", "Autor", "Categoria", "Espirito", "ISBN", "Qtd", "Preco Compra", "Preco Venda", "Fornecedor"]
+
+        frame = tb.Frame(self.root)
+
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Título
+        tb.Label(frame, text="Gerenciar Livros", font=("Arial", 20, "bold")).pack(pady=(0, 5))
+
+        # Barra de pesquisa + botões de ação na mesma linha
+        search_frame = tb.Frame(frame)
+        search_frame.pack(fill=tk.X, pady=(0, 5))
+
+        tb.Label(search_frame, text="🔍 Pesquisar:", font=("Arial", 15)).pack(side=tk.LEFT, padx=(0, 5))
+        self.entry_pesquisa_livro = tb.Entry(search_frame, width=30)
+        self.entry_pesquisa_livro.pack(side=tk.LEFT, padx=(0, 5))
+        tb.Button(search_frame, text="Buscar", bootstyle=INFO,
+                command=self.pesquisar_livros).pack(side=tk.LEFT, padx=(0, 3))
+        tb.Button(search_frame, text="Limpar", bootstyle=SECONDARY,
+                command=self.atualizar_lista_livros).pack(side=tk.LEFT, padx=(0, 15))
+
+        # Separador visual e botões de ação na mesma linha
+        tb.Button(search_frame, text="Adicionar", bootstyle=PRIMARY, command=self.adicionar_livro).pack(side=tk.LEFT, padx=3)
+        tb.Button(search_frame, text="Atualizar", bootstyle=PRIMARY, command=self.atualizar_lista_livros).pack(side=tk.LEFT, padx=3)
+        tb.Button(search_frame, text="Editar", bootstyle=PRIMARY, command=self.editar_livro).pack(side=tk.LEFT, padx=3)
+        tb.Button(search_frame, text="Deletar", bootstyle=DANGER, command=self.deletar_livro).pack(side=tk.LEFT, padx=3)
+        tb.Button(search_frame, text="Voltar", bootstyle=SECONDARY, command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=3)
+
+        # Bind Enter na pesquisa
+        self.entry_pesquisa_livro.bind("<Return>", lambda e: self.pesquisar_livros())
+
+        # Treeview com scrollbars
+        tree_container = tb.Frame(frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+        self.tree = tb.Treeview(tree_container, columns=colunas, show="headings", height=20)
+        
+        # Aumentar fonte das linhas e do cabeçalho
+        style = tb.Style()
+        style.configure("Treeview", font=("Arial", 12))
+        style.configure("Treeview.Heading", font=("Arial", 12, "bold"))
+        style.configure("Treeview", font=("Arial", 12), rowheight=30)
+
+        vsb = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        tree_container.grid_columnconfigure(0, weight=8)
+        tree_container.grid_rowconfigure(0, weight=8)
+
+        self.tree.column("#0", width=0, stretch=tk.NO)
+        for col in colunas:
+            self.tree.column(col, anchor=tk.W, width=150, minwidth=100, stretch=True)
+            self.tree.heading(col, text=col, anchor=tk.W)
+
+        # Carrega os livros incluindo a categoria diretamente do banco para garantir ordem
+        try:
+            self.db.cursor.execute('''
+                SELECT l.id, l.titulo, l.autor, l.categoria, l.espirito, l.isbn, l.quantidade, l.preco_compra, l.preco_venda, COALESCE(f.nome, 'N/A')
+                FROM livros l
+                LEFT JOIN fornecedores f ON l.fornecedor_id = f.id
+                ORDER BY l.titulo
+            ''')
+            rows = self.db.cursor.fetchall()
+        except Exception:
+            rows = []
+
+        for i, item in enumerate(rows):
+            tag = "par" if i % 2 == 0 else "impar"
+            self.tree.insert("", "end", values=item[:len(colunas)], tags=(tag,))
+
+        self.refresh_func = self.atualizar_lista_livros
+    
+    def pesquisar_livros(self):
+        termo = self.entry_pesquisa_livro.get().strip()
+        if not termo:
+            self.atualizar_lista_livros()
+            return
+
+        # Busca diretamente incluindo a categoria
+        termo_busca = f"%{termo}%"
+        try:
+            self.db.cursor.execute('''
+                SELECT l.id, l.titulo, l.autor, l.categoria, l.espirito, l.isbn, l.quantidade, l.preco_compra, l.preco_venda, COALESCE(f.nome, 'N/A')
+                FROM livros l
+                LEFT JOIN fornecedores f ON l.fornecedor_id = f.id
+                WHERE LOWER(l.titulo) LIKE LOWER(?) OR LOWER(l.isbn) LIKE LOWER(?)
+                ORDER BY l.titulo
+            ''', (termo_busca, termo_busca))
+            resultados = self.db.cursor.fetchall()
+        except Exception:
+            resultados = []
+
+        # Limpa a tree e preenche com os resultados filtrados
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        ncols = len(self.tree['columns'])
+        for i, item in enumerate(resultados):
+            tag = "par" if i % 2 == 0 else "impar"
+            self.tree.insert("", "end", values=item[:ncols], tags=(tag,))
+
+        if not resultados:
+            messagebox.showinfo("Pesquisa", f"Nenhum livro encontrado para: '{termo}'")
     
     def tela_fornecedores(self):
-        dados = self.fornecedor.listar()
+        self.limpar_janela()
         colunas = ["ID", "Nome", "CNPJ", "Email", "Telefone"]
-        self.criar_tela_crud("Fornecedores", dados, colunas,
-                            self.adicionar_fornecedor, self.editar_fornecedor,
-                            self.deletar_fornecedor, self.atualizar_lista_fornecedores)
+
+        frame = tb.Frame(self.root)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        # --- TÍTULO ---
+        tb.Label(frame, text="Gerenciar Fornecedores", font=("Arial", 20, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 15))
+
+        # --- BOTÕES HORIZONTAIS ---
+        botoes_frame = tb.Frame(frame)
+        botoes_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        
+        tb.Button(botoes_frame, text="Adicionar", bootstyle=PRIMARY,
+                 command=self.adicionar_fornecedor).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Editar", bootstyle=PRIMARY,
+                 command=self.editar_fornecedor).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Deletar", bootstyle=DANGER,
+                 command=self.deletar_fornecedor).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Atualizar", bootstyle=PRIMARY,
+                 command=self.atualizar_lista_fornecedores).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Voltar", bootstyle=SECONDARY,
+                 command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=3)
+
+        # --- TREEVIEW COM SCROLLBARS ---
+        tree_container = tb.Frame(frame)
+        tree_container.grid(row=2, column=0, sticky=tk.NSEW)
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
+
+        self.tree = tb.Treeview(tree_container, columns=colunas, show="headings", height=20)
+        
+        style = tb.Style()
+        style.configure("Treeview", font=("Arial", 11), rowheight=25)
+        style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+
+        vsb = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        self.tree.column("#0", width=0, stretch=tk.NO)
+        for col in colunas:
+            self.tree.column(col, anchor=tk.W, width=150, minwidth=100, stretch=True)
+            self.tree.heading(col, text=col, anchor=tk.W)
+
+        dados = self.fornecedor.listar()
+        for i, item in enumerate(dados):
+            tag = "par" if i % 2 == 0 else "impar"
+            self.tree.insert("", "end", values=item[:len(colunas)], tags=(tag,))
+
+        self.refresh_func = self.atualizar_lista_fornecedores
     
     def tela_vendedores(self):
-        dados = self.vendedor.listar()
+        self.limpar_janela()
         colunas = ["ID", "Nome Vendedor", "Data Cadastro"]
-        self.criar_tela_crud("Vendedores", dados, colunas,
-                            self.adicionar_vendedor, self.editar_vendedor,
-                            self.deletar_vendedor, self.atualizar_lista_vendedores)
+
+        frame = tb.Frame(self.root)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
+
+        # --- TÍTULO ---
+        tb.Label(frame, text="Gerenciar Vendedores", font=("Arial", 20, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 15))
+
+        # --- BOTÕES HORIZONTAIS ---
+        botoes_frame = tb.Frame(frame)
+        botoes_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        
+        tb.Button(botoes_frame, text="Adicionar", bootstyle=PRIMARY,
+                 command=self.adicionar_vendedor).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Editar", bootstyle=PRIMARY,
+                 command=self.editar_vendedor).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Deletar", bootstyle=DANGER,
+                 command=self.deletar_vendedor).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Atualizar", bootstyle=PRIMARY,
+                 command=self.atualizar_lista_vendedores).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Voltar", bootstyle=SECONDARY,
+                 command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=3)
+
+        # --- TREEVIEW COM SCROLLBARS ---
+        tree_container = tb.Frame(frame)
+        tree_container.grid(row=2, column=0, sticky=tk.NSEW)
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
+
+        self.tree = tb.Treeview(tree_container, columns=colunas, show="headings", height=20)
+        
+        style = tb.Style()
+        style.configure("Treeview", font=("Arial", 11), rowheight=25)
+        style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+
+        vsb = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        self.tree.column("#0", width=0, stretch=tk.NO)
+        for col in colunas:
+            self.tree.column(col, anchor=tk.W, width=150, minwidth=100, stretch=True)
+            self.tree.heading(col, text=col, anchor=tk.W)
+
+        dados = self.vendedor.listar()
+        for i, item in enumerate(dados):
+            tag = "par" if i % 2 == 0 else "impar"
+            self.tree.insert("", "end", values=item[:len(colunas)], tags=(tag,))
+
+        self.refresh_func = self.atualizar_lista_vendedores
     
     def criar_tela_crud(self, titulo, dados, colunas, add_func, edit_func, del_func, refresh_func):
         self.limpar_janela()
@@ -341,36 +661,42 @@ class BibliotecaApp:
         entrada_autor = tb.Entry(form_frame, width=40)
         entrada_autor.grid(row=2, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
         campos['autor'] = entrada_autor
-        
+
+        # Categoria
+        tb.Label(form_frame, text="Categoria:", font=("Arial", 10, "bold")).grid(row=3, column=0, sticky=tk.W, pady=(10, 2))
+        entrada_categoria = tb.Entry(form_frame, width=40)
+        entrada_categoria.grid(row=3, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
+        campos['categoria'] = entrada_categoria
+
         # Espírito
-        tb.Label(form_frame, text="Espírito:", font=("Arial", 10, "bold")).grid(row=3, column=0, sticky=tk.W, pady=(10, 2))
+        tb.Label(form_frame, text="Espírito:", font=("Arial", 10, "bold")).grid(row=4, column=0, sticky=tk.W, pady=(10, 2))
         entrada_espirito = tb.Entry(form_frame, width=40)
-        entrada_espirito.grid(row=3, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
+        entrada_espirito.grid(row=4, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
         campos['espirito'] = entrada_espirito
         
         # Quantidade
-        tb.Label(form_frame, text="Quantidade:", font=("Arial", 10, "bold")).grid(row=4, column=0, sticky=tk.W, pady=(10, 2))
+        tb.Label(form_frame, text="Quantidade:", font=("Arial", 10, "bold")).grid(row=5, column=0, sticky=tk.W, pady=(10, 2))
         entrada_qtd = tb.Entry(form_frame, width=40)
         entrada_qtd.insert(0, "1")
-        entrada_qtd.grid(row=4, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
+        entrada_qtd.grid(row=5, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
         campos['qtd'] = entrada_qtd
         
         # Preço de Compra
-        tb.Label(form_frame, text="Preço de Compra:", font=("Arial", 10, "bold")).grid(row=5, column=0, sticky=tk.W, pady=(10, 2))
+        tb.Label(form_frame, text="Preço de Compra:", font=("Arial", 10, "bold")).grid(row=6, column=0, sticky=tk.W, pady=(10, 2))
         entrada_preco_compra = tb.Entry(form_frame, width=40)
         entrada_preco_compra.insert(0, "0.00")
-        entrada_preco_compra.grid(row=5, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
+        entrada_preco_compra.grid(row=6, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
         campos['preco_compra'] = entrada_preco_compra
         
         # Preço de Venda
-        tb.Label(form_frame, text="Preço de Venda:", font=("Arial", 10, "bold")).grid(row=6, column=0, sticky=tk.W, pady=(10, 2))
+        tb.Label(form_frame, text="Preço de Venda:", font=("Arial", 10, "bold")).grid(row=7, column=0, sticky=tk.W, pady=(10, 2))
         entrada_preco_venda = tb.Entry(form_frame, width=40)
         entrada_preco_venda.insert(0, "0.00")
-        entrada_preco_venda.grid(row=6, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
+        entrada_preco_venda.grid(row=7, column=1, pady=(0, 10), sticky=tk.EW, padx=(10, 0))
         campos['preco_venda'] = entrada_preco_venda
         
         # Fornecedor
-        tb.Label(form_frame, text="Fornecedor:", font=("Arial", 10, "bold")).grid(row=7, column=0, sticky=tk.W, pady=(10, 2))
+        tb.Label(form_frame, text="Fornecedor:", font=("Arial", 10, "bold")).grid(row=8, column=0, sticky=tk.W, pady=(10, 2))
         fornecedores = self.fornecedor.listar()
         fornecedor_combo = tb.Combobox(form_frame, 
                                        values=[f"{f[0]} - {f[1]}" for f in fornecedores], 
@@ -378,7 +704,7 @@ class BibliotecaApp:
         # Definir fornecedor 1 como padrão se existir
         if fornecedores:
             fornecedor_combo.set(f"{fornecedores[0][0]} - {fornecedores[0][1]}")
-        fornecedor_combo.grid(row=7, column=1, pady=(0, 20), sticky=tk.EW, padx=(10, 0))
+        fornecedor_combo.grid(row=8, column=1, pady=(0, 20), sticky=tk.EW, padx=(10, 0))
         campos['fornecedor'] = fornecedor_combo
         
         # Configurar responsividade da grid
@@ -404,8 +730,9 @@ class BibliotecaApp:
                     return
                 
                 fornecedor_id = int(fornecedor_sel.split(" - ")[0]) if fornecedor_sel else None
-                
-                sucesso, msg = self.livro.adicionar(titulo, autor, isbn, qtd, preco_compra, preco_venda, espirito, fornecedor_id)
+                categoria = campos.get('categoria').get().strip() if campos.get('categoria') else None
+
+                sucesso, msg = self.livro.adicionar(titulo, autor, isbn, qtd, preco_compra, preco_venda, espirito, fornecedor_id, categoria)
                 messagebox.showinfo("Resultado", msg)
                 
                 if sucesso:
@@ -455,6 +782,19 @@ class BibliotecaApp:
             entrada_autor.insert(0, livro[2])
             entrada_autor.pack(pady=(0, 10), fill=tk.X)
             campos['autor'] = entrada_autor
+            
+            # Categoria
+            tb.Label(frame, text="Categoria:", font=("Arial", 10)).pack(anchor=tk.W, pady=(10, 2))
+            entrada_categoria = tb.Entry(frame, width=40)
+            # tenta recuperar categoria diretamente do banco (mais seguro que depender da ordem do tuple)
+            try:
+                cat_row = self.db.cursor.execute('SELECT categoria FROM livros WHERE id=?', (id_item,)).fetchone()
+                if cat_row and cat_row[0] is not None:
+                    entrada_categoria.insert(0, cat_row[0])
+            except Exception:
+                pass
+            entrada_categoria.pack(pady=(0, 10), fill=tk.X)
+            campos['categoria'] = entrada_categoria
             
             # Espirito
             tb.Label(frame, text="Espirito:", font=("Arial", 10)).pack(anchor=tk.W, pady=(10, 2))
@@ -524,8 +864,9 @@ class BibliotecaApp:
                         return
                     
                     fornecedor_id = int(fornecedor_sel.split(" - ")[0]) if fornecedor_sel else None
-                    
-                    sucesso, msg = self.livro.atualizar(id_item, titulo, autor, isbn, qtd, preco_compra, preco_venda, espirito, fornecedor_id)
+                    categoria = campos.get('categoria').get().strip() if campos.get('categoria') else None
+
+                    sucesso, msg = self.livro.atualizar(id_item, titulo, autor, isbn, qtd, preco_compra, preco_venda, espirito, fornecedor_id, categoria)
                     messagebox.showinfo("Resultado", msg)
                     
                     if sucesso:
@@ -553,267 +894,232 @@ class BibliotecaApp:
     
     def tela_entrada_livros(self):
         self.limpar_janela()
+
+        # Frame principal responsivo
         frame = tb.Frame(self.root)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+        frame.columnconfigure(0, weight=1)
+        # linha 0=título, 1=dados, 2=cálculo, 3=fornecedor, 4=botões
+        for r in range(5):
+            frame.rowconfigure(r, weight=0)
 
-        # Canvas + Scrollbar para garantir visibilidade em telas menores
-        canvas = tk.Canvas(frame)
-        scrollbar = tb.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        content_frame = tb.Frame(canvas)
+        # --- TÍTULO ---
+        tb.Label(frame, text="Entrada de Livros", font=("Arial", 18, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 8))
 
-        content_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=content_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # ── BLOCO: DADOS DO LIVRO ─────────────────────────────────────
+        entrada_frame = tb.LabelFrame(frame, text="Dados do Livro")
+        entrada_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 8))
+        entrada_frame.columnconfigure(1, weight=1)
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        titulo_label = tb.Label(content_frame, text="Entrada de Livros", font=("Arial", 18, "bold"))
-        titulo_label.pack(pady=10)
-
-        # Frame de entrada
-        entrada_frame = tb.LabelFrame(content_frame, text="Dados do Livro")
-        entrada_frame.pack(fill=X, padx=10, pady=10, ipady=10, ipadx=10)
-        
-        # Dicionário para armazenar livros e seus dados - mapeia por TÍTULO
+        # Dicionários de lookup
         livros_dict = {}
-        livros_dict_isbn = {}  # mapeia por ISBN
-        todos_livros = self.livro.listar()
-        for livro in todos_livros:
-            # livro[0]=id, livro[1]=titulo, livro[4]=isbn
+        livros_dict_isbn = {}
+        for livro in self.livro.listar():
             titulo = livro[1] if livro[1] else f"ID-{livro[0]}"
-            isbn = livro[4] if livro[4] else f"ID-{livro[0]}"
-            
-            livros_dict[titulo] = {
-                'id': livro[0],
-                'titulo': livro[1],
-                'isbn': isbn,
-                'preco_compra': livro[6],
-                'preco_venda': livro[7],
+            isbn   = livro[4] if livro[4] else f"ID-{livro[0]}"
+            info = {
+                'id': livro[0], 'titulo': livro[1], 'isbn': isbn,
+                'preco_compra': livro[6], 'preco_venda': livro[7],
                 'fornecedor_id': livro[9] if len(livro) > 9 else None
             }
-            
-            livros_dict_isbn[isbn] = {
-                'id': livro[0],
-                'titulo': livro[1],
-                'isbn': isbn,
-                'preco_compra': livro[6],
-                'preco_venda': livro[7],
-                'fornecedor_id': livro[9] if len(livro) > 9 else None
-            }
-        
-        # Nome do Livro - Com Autocompletar
-        tb.Label(entrada_frame, text="Nome do Livro:", font=("Arial", 10)).grid(row=0, column=0, sticky=tk.W, pady=5)
-        
-        entrada_nome = tb.Combobox(entrada_frame, width=48, state="normal")
-        entrada_nome.grid(row=0, column=1, padx=10, pady=5)
-        
-        def atualizar_sugestoes_nome(*args):
-            """Atualiza sugestões de nomes conforme o usuário digita"""
-            texto_digitado = entrada_nome.get().strip().lower()
-            
-            if not texto_digitado:
-                entrada_nome['values'] = list(livros_dict.keys())
-            else:
-                # Filtra livros que começam com o texto digitado
-                sugestoes = [liv for liv in livros_dict.keys()
-                            if liv.lower().startswith(texto_digitado)]
-                entrada_nome['values'] = sugestoes
-        
-        def ao_selecionar_livro_por_nome(*args):
-            """Carrega dados do livro selecionado pelo nome"""
-            livro_selecionado = entrada_nome.get().strip()
+            livros_dict[titulo]  = info
+            livros_dict_isbn[isbn] = info
 
-            if livro_selecionado in livros_dict:
-                dados_livro = livros_dict[livro_selecionado]
-                # Preenche apenas ISBN, sem alterar valor unitário
-                entrada_isbn.delete(0, tk.END)
-                entrada_isbn.insert(0, dados_livro['isbn'])
-                # Seta campo de preco de compra/venda com calculo atual do input
-                atualizar_calculos()
-            else:
-                if livro_selecionado:
-                    if not messagebox.askyesno("Livro não cadastrado", f"Livro '{livro_selecionado}' não cadastrado. Deseja continuar cadastrando?"):
-                        entrada_nome.delete(0, tk.END)
-                        entrada_isbn.delete(0, tk.END)
-        
-        entrada_nome.bind('<KeyRelease>', atualizar_sugestoes_nome)
-        entrada_nome.bind('<<ComboboxSelected>>', ao_selecionar_livro_por_nome)
-        
-        # Inicializa com lista de todos os livros
+        # Nome do Livro
+        tb.Label(entrada_frame, text="Nome do Livro:", font=("Arial", 10)).grid(
+            row=0, column=0, sticky=tk.W, padx=10, pady=5)
+        entrada_nome = tb.Combobox(entrada_frame, state="normal")
+        entrada_nome.grid(row=0, column=1, sticky=tk.EW, padx=10, pady=5)
         entrada_nome['values'] = list(livros_dict.keys())
-        
-        # ISBN - Campo editável
-        tb.Label(entrada_frame, text="ISBN:", font=("Arial", 10)).grid(row=1, column=0, sticky=tk.W, pady=5)
-        entrada_isbn = tb.Entry(entrada_frame, width=50)
-        entrada_isbn.grid(row=1, column=1, padx=10, pady=5)
-        
-        def ao_preencher_isbn(*args):
-            """Busca o livro pelo ISBN quando preenchido"""
-            isbn_digitado = entrada_isbn.get().strip()
 
-            if isbn_digitado and isbn_digitado in livros_dict_isbn:
-                dados_livro = livros_dict_isbn[isbn_digitado]
-                # Se o nome não foi preenchido, preenche
-                if not entrada_nome.get():
-                    entrada_nome.delete(0, tk.END)
-                    entrada_nome.insert(0, dados_livro['titulo'])
-                # Mantém valor unitário do usuário e recalcula preços
-                atualizar_calculos()
-        
-        entrada_isbn.bind('<FocusOut>', ao_preencher_isbn)
-        
+        # ISBN
+        tb.Label(entrada_frame, text="ISBN:", font=("Arial", 10)).grid(
+            row=1, column=0, sticky=tk.W, padx=10, pady=5)
+        entrada_isbn = tb.Entry(entrada_frame)
+        entrada_isbn.grid(row=1, column=1, sticky=tk.EW, padx=10, pady=5)
+
         # Quantidade
-        tb.Label(entrada_frame, text="Quantidade:", font=("Arial", 10)).grid(row=2, column=0, sticky=tk.W, pady=5)
-        entrada_qtd = tb.Entry(entrada_frame, width=50)
+        tb.Label(entrada_frame, text="Quantidade:", font=("Arial", 10)).grid(
+            row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        entrada_qtd = tb.Entry(entrada_frame)
         entrada_qtd.insert(0, "1")
-        entrada_qtd.grid(row=2, column=1, padx=10, pady=5)
-        
+        entrada_qtd.grid(row=2, column=1, sticky=tk.EW, padx=10, pady=5)
+
         # Valor Unitário
-        tb.Label(entrada_frame, text="Valor Unitario (R$):", font=("Arial", 10)).grid(row=3, column=0, sticky=tk.W, pady=5)
-        entrada_valor = tb.Entry(entrada_frame, width=50)
+        tb.Label(entrada_frame, text="Valor Unitário (R$):", font=("Arial", 10)).grid(
+            row=3, column=0, sticky=tk.W, padx=10, pady=5)
+        entrada_valor = tb.Entry(entrada_frame)
         entrada_valor.insert(0, "0.00")
-        entrada_valor.grid(row=3, column=1, padx=10, pady=5)
-        
+        entrada_valor.grid(row=3, column=1, sticky=tk.EW, padx=10, pady=5)
+
         # Percentual de Desconto
-        tb.Label(entrada_frame, text="Percentual de Desconto (%):", font=("Arial", 10)).grid(row=4, column=0, sticky=tk.W, pady=5)
-        entrada_percentual = tb.Entry(entrada_frame, width=50)
+        tb.Label(entrada_frame, text="Percentual de Desconto (%):", font=("Arial", 10)).grid(
+            row=4, column=0, sticky=tk.W, padx=10, pady=5)
+        entrada_percentual = tb.Entry(entrada_frame)
         entrada_percentual.insert(0, "0")
-        entrada_percentual.grid(row=4, column=1, padx=10, pady=5)
-        
-        # Frame de cálculos
-        calculo_frame = tb.LabelFrame(content_frame, text="Calculo Automatico")
-        calculo_frame.pack(fill=X, padx=10, pady=10, ipady=10, ipadx=10)
-        
-        tb.Label(calculo_frame, text="Preco Compra (R$):", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=5)
-        label_preco_compra = tb.Label(calculo_frame, text="0.00", font=("Arial", 12, "bold"), foreground="green")
-        label_preco_compra.grid(row=0, column=1, padx=10, pady=5, sticky=tk.W)
-        
-        tb.Label(calculo_frame, text="Preco Venda (R$):", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky=tk.W, pady=5)
-        entrada_preco_venda = tb.Entry(calculo_frame, width=30, font=("Arial", 12, "bold"))
+        entrada_percentual.grid(row=4, column=1, sticky=tk.EW, padx=10, pady=5)
+
+        # ── BLOCO: CÁLCULO AUTOMÁTICO ─────────────────────────────────
+        calculo_frame = tb.LabelFrame(frame, text="Cálculo Automático")
+        calculo_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 8))
+        calculo_frame.columnconfigure(1, weight=1)
+
+        tb.Label(calculo_frame, text="Preço Compra (R$):", font=("Arial", 10, "bold")).grid(
+            row=0, column=0, sticky=tk.W, padx=10, pady=5)
+        label_preco_compra = tb.Label(calculo_frame, text="0.00",
+                                      font=("Arial", 12, "bold"), foreground="green")
+        label_preco_compra.grid(row=0, column=1, sticky=tk.W, padx=10, pady=5)
+
+        tb.Label(calculo_frame, text="Preço Venda (R$):", font=("Arial", 10, "bold")).grid(
+            row=1, column=0, sticky=tk.W, padx=10, pady=5)
+        entrada_preco_venda = tb.Entry(calculo_frame, font=("Arial", 12, "bold"))
         entrada_preco_venda.insert(0, "0.00")
-        entrada_preco_venda.grid(row=1, column=1, padx=10, pady=5, sticky=tk.W)
-        
-        tb.Label(calculo_frame, text="(editável - sugestão automática)", font=("Arial", 8, "italic")).grid(row=1, column=2, padx=10, pady=5)
-        
+        entrada_preco_venda.grid(row=1, column=1, sticky=tk.EW, padx=10, pady=5)
+        tb.Label(calculo_frame, text="(editável - sugestão automática)",
+                 font=("Arial", 8, "italic")).grid(row=1, column=2, padx=10, pady=5)
+
+        # ── BLOCO: FORNECEDOR ─────────────────────────────────────────
+        fornecedor_frame = tb.LabelFrame(frame, text="Fornecedor")
+        fornecedor_frame.grid(row=3, column=0, sticky=tk.EW, pady=(0, 8))
+        fornecedor_frame.columnconfigure(0, weight=1)
+
+        fornecedores = self.fornecedor.listar()
+        fornecedor_combo = tb.Combobox(fornecedor_frame,
+                                       values=[f"{f[0]} - {f[1]}" for f in fornecedores],
+                                       state="readonly")
+        fornecedor_combo.pack(fill=tk.X, padx=10, pady=8)
+
+        # ── BOTÕES ────────────────────────────────────────────────────
+        botoes_frame = tb.Frame(frame)
+        botoes_frame.grid(row=4, column=0, sticky=tk.W, pady=8)
+
+        # ── FUNÇÕES ───────────────────────────────────────────────────
         def atualizar_calculos(*args):
             try:
                 valor_unit = float(entrada_valor.get())
                 percentual = float(entrada_percentual.get())
-                
-                # Calcula preco_compra
                 preco_compra = valor_unit - (valor_unit * percentual / 100)
-                
-                # Calcula preco_venda com lucro de 10 reais (sugestão)
                 preco_venda_sugerido = preco_compra + 10
-                
                 label_preco_compra.config(text=f"{preco_compra:.2f}")
                 entrada_preco_venda.delete(0, tk.END)
                 entrada_preco_venda.insert(0, f"{preco_venda_sugerido:.2f}")
-                
             except ValueError:
                 label_preco_compra.config(text="Erro")
                 entrada_preco_venda.delete(0, tk.END)
                 entrada_preco_venda.insert(0, "Erro")
-        
-        entrada_valor.bind('<KeyRelease>', atualizar_calculos)
-        entrada_percentual.bind('<KeyRelease>', atualizar_calculos)
-        
-        # Frame de fornecedor
-        fornecedor_frame = tb.LabelFrame(content_frame, text="Fornecedor")
-        fornecedor_frame.pack(fill=X, padx=10, pady=10, ipady=10, ipadx=10)
-        
-        tb.Label(fornecedor_frame, text="Fornecedor:", font=("Arial", 10)).pack(anchor=tk.W, pady=5)
-        fornecedores = self.fornecedor.listar()
-        fornecedor_combo = tb.Combobox(fornecedor_frame, 
-                                       values=[f"{f[0]} - {f[1]}" for f in fornecedores], 
-                                       state="readonly", width=50)
-        fornecedor_combo.pack(fill=tk.X, pady=5)
-        
-        # Botões de ação
-        botoes_frame = tb.Frame(content_frame)
-        botoes_frame.pack(pady=20)
-        
+
+        def atualizar_sugestoes_nome(event):
+            if event.keysym in ('Down', 'Up', 'Return', 'Escape', 'Tab'):
+                return
+            texto = entrada_nome.get().strip().lower()
+            sugestoes = [l for l in livros_dict.keys() if texto in l.lower()]
+            entrada_nome['values'] = sugestoes if sugestoes else list(livros_dict.keys())
+
+        def ao_selecionar_livro_por_nome(*args):
+            livro_sel = entrada_nome.get().strip()
+            if livro_sel in livros_dict:
+                entrada_isbn.delete(0, tk.END)
+                entrada_isbn.insert(0, livros_dict[livro_sel]['isbn'])
+                atualizar_calculos()
+            elif livro_sel:
+                if not messagebox.askyesno("Livro não cadastrado",
+                        f"Livro '{livro_sel}' não cadastrado. Deseja continuar cadastrando?"):
+                    entrada_nome.delete(0, tk.END)
+                    entrada_isbn.delete(0, tk.END)
+
+        def ao_preencher_isbn(*args):
+            isbn_digitado = entrada_isbn.get().strip()
+            if isbn_digitado and isbn_digitado in livros_dict_isbn:
+                dados = livros_dict_isbn[isbn_digitado]
+                if not entrada_nome.get():
+                    entrada_nome.delete(0, tk.END)
+                    entrada_nome.insert(0, dados['titulo'])
+                atualizar_calculos()
+
+        def limpar_campos():
+            entrada_nome.delete(0, tk.END)
+            entrada_isbn.delete(0, tk.END)
+            entrada_qtd.delete(0, tk.END)
+            entrada_qtd.insert(0, "1")
+            entrada_valor.delete(0, tk.END)
+            entrada_valor.insert(0, "0.00")
+            entrada_percentual.delete(0, tk.END)
+            entrada_percentual.insert(0, "0")
+            fornecedor_combo.set("")
+            label_preco_compra.config(text="0.00")
+            entrada_preco_venda.delete(0, tk.END)
+            entrada_preco_venda.insert(0, "0.00")
+
         def salvar_entrada():
             try:
-                nome_livro = entrada_nome.get().strip()
-                isbn_livro = entrada_isbn.get().strip()
-                quantidade = int(entrada_qtd.get())
-                valor_unit = float(entrada_valor.get())
-                percentual = float(entrada_percentual.get())
-                preco_venda = float(entrada_preco_venda.get())
+                nome_livro    = entrada_nome.get().strip()
+                isbn_livro    = entrada_isbn.get().strip()
+                quantidade    = int(entrada_qtd.get())
+                valor_unit    = float(entrada_valor.get())
+                percentual    = float(entrada_percentual.get())
+                preco_venda   = float(entrada_preco_venda.get())
                 fornecedor_sel = fornecedor_combo.get()
 
                 if not nome_livro:
                     messagebox.showwarning("Aviso", "Digite o nome do livro!")
                     return
-
-                # Se encontrou pelo nome, preenche ISBN automaticamente
-                if nome_livro in livros_dict and not isbn_livro:
-                    isbn_livro = livros_dict[nome_livro].get('isbn', '')
-
-                # Se encontrou pelo ISBN, preenche nome automaticamente
-                if isbn_livro in livros_dict_isbn and not nome_livro:
-                    nome_livro = livros_dict_isbn[isbn_livro].get('titulo', nome_livro)
-
                 if not fornecedor_sel:
                     messagebox.showwarning("Aviso", "Selecione um fornecedor!")
                     return
 
-                # Calcula valores
+                if nome_livro in livros_dict and not isbn_livro:
+                    isbn_livro = livros_dict[nome_livro].get('isbn', '')
+                if isbn_livro in livros_dict_isbn and not nome_livro:
+                    nome_livro = livros_dict_isbn[isbn_livro].get('titulo', nome_livro)
+
                 preco_compra = valor_unit - (valor_unit * percentual / 100)
                 fornecedor_id = int(fornecedor_sel.split(" - ")[0])
 
-                # Tenta buscar por ISBN, depois por título
                 if isbn_livro:
                     livro_existente = self.db.cursor.execute(
-                        'SELECT id FROM livros WHERE isbn=?', (isbn_livro,)
-                    ).fetchone()
+                        'SELECT id FROM livros WHERE isbn=?', (isbn_livro,)).fetchone()
                 else:
                     livro_existente = self.db.cursor.execute(
-                        'SELECT id FROM livros WHERE titulo=?', (nome_livro,)
-                    ).fetchone()
-                
+                        'SELECT id FROM livros WHERE titulo=?', (nome_livro,)).fetchone()
+
                 if livro_existente:
-                    # Atualiza livro existente
-                    livro_id = livro_existente[0]
                     self.db.cursor.execute('''
                         UPDATE livros SET quantidade=quantidade+?, preco_compra=?, preco_venda=?, fornecedor_id=?
                         WHERE id=?
-                    ''', (quantidade, preco_compra, preco_venda, fornecedor_id, livro_id))
+                    ''', (quantidade, preco_compra, preco_venda, fornecedor_id, livro_existente[0]))
                     msg = f"Livro atualizado! +{quantidade} unidades"
                 else:
-                    # Cria novo livro
                     self.db.cursor.execute('''
                         INSERT INTO livros (titulo, isbn, quantidade, preco_compra, preco_venda, fornecedor_id, data_cadastro)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (nome_livro, isbn_livro, quantidade, preco_compra, preco_venda, fornecedor_id, datetime.now().isoformat()))
+                    ''', (nome_livro, isbn_livro, quantidade, preco_compra, preco_venda,
+                          fornecedor_id, datetime.now().isoformat()))
                     msg = "Livro adicionado com sucesso!"
-                
+
                 self.db.conexao.commit()
                 messagebox.showinfo("Sucesso", msg)
-                
-                # Limpa campos
-                entrada_nome.delete(0, tk.END)
-                entrada_isbn.delete(0, tk.END)
-                entrada_qtd.delete(0, tk.END)
-                entrada_qtd.insert(0, "1")
-                entrada_valor.delete(0, tk.END)
-                entrada_valor.insert(0, "0.00")
-                entrada_percentual.delete(0, tk.END)
-                entrada_percentual.insert(0, "0")
-                fornecedor_combo.set("")
-                label_preco_compra.config(text="0.00")
-                entrada_preco_venda.delete(0, tk.END)
-                entrada_preco_venda.insert(0, "0.00")
-                
+                limpar_campos()
+
             except ValueError:
                 messagebox.showerror("Erro", "Verifique os valores digitados!")
             except Exception as e:
                 messagebox.showerror("Erro", str(e))
-        
-        tb.Button(botoes_frame, text="Salvar Entrada", command=salvar_entrada).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes_frame, text="Voltar", command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=5)
+
+        # Bindings
+        entrada_nome.bind('<KeyRelease>', atualizar_sugestoes_nome)
+        entrada_nome.bind('<<ComboboxSelected>>', ao_selecionar_livro_por_nome)
+        entrada_isbn.bind('<FocusOut>', ao_preencher_isbn)
+        entrada_valor.bind('<KeyRelease>', atualizar_calculos)
+        entrada_percentual.bind('<KeyRelease>', atualizar_calculos)
+
+        # Botões
+        tb.Button(botoes_frame, text="💾 Salvar Entrada", bootstyle=SUCCESS,
+                  command=salvar_entrada).pack(side=tk.LEFT, padx=(0, 8))
+        tb.Button(botoes_frame, text="🧹 Limpar", bootstyle=SECONDARY,
+                  command=limpar_campos).pack(side=tk.LEFT, padx=(0, 8))
+        tb.Button(botoes_frame, text="⬅ Voltar", bootstyle=SECONDARY,
+                  command=self.criar_tela_inicial).pack(side=tk.LEFT)
     
     def adicionar_fornecedor(self):
         self.janela_formulario("Adicionar Fornecedor",
@@ -885,221 +1191,397 @@ class BibliotecaApp:
     
     def tela_vendas(self):
         self.limpar_janela()
+        
         frame = tb.Frame(self.root)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Canvas + Scrollbar para garantir visibilidade em telas menores
-        canvas = tk.Canvas(frame)
-        scrollbar = tb.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        content_frame = tb.Frame(canvas)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=0)
+        frame.rowconfigure(1, weight=0)
+        frame.rowconfigure(2, weight=1)
 
-        content_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=content_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # --- TÍTULO ---
+        tb.Label(frame, text="Gerenciar Vendas", font=("Arial", 20, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 15))
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # --- BOTÕES HORIZONTAIS (APÓS O TÍTULO) ---
+        botoes_frame = tb.Frame(frame)
+        botoes_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
         
-        titulo_label = tb.Label(content_frame, text="Vendas", font=("Arial", 18, "bold"))
-        titulo_label.pack()
-        
-        botoes = tb.Frame(content_frame)
-        botoes.pack(pady=10)
-        tb.Button(botoes, text="Nova Venda", command=self.nova_venda).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes, text="Continuar Venda", command=self.continuar_venda).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes, text="Relatorio de Vendas", command=self.relatorio_vendas).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes, text="Ver Historico", command=self.historico_vendas).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes, text="Voltar", command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_frame, text="Nova Venda", bootstyle=SUCCESS,
+                 command=self.nova_venda).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Continuar Venda", bootstyle=INFO,
+                 command=self.continuar_venda).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Relatório de Vendas", bootstyle=PRIMARY,
+                 command=self.relatorio_vendas).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Histórico", bootstyle=WARNING,
+                 command=self.historico_vendas).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Voltar", bootstyle=SECONDARY,
+                 command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=3)
 
     def relatorio_vendas(self):
         self.limpar_janela()
+
         frame = tb.Frame(self.root)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10, ipady=10, ipadx=10)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.rowconfigure(2, weight=1)
+        frame.columnconfigure(0, weight=1)
 
-        # Canvas + Scrollbar para garantir visibilidade em telas menores
-        canvas = tk.Canvas(frame)
-        scrollbar = tb.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        content_frame = tb.Frame(canvas)
+        # --- TÍTULO ---
+        tb.Label(frame, text="Relatório de Vendas", font=("Arial", 18, "bold")).grid(
+            row=0, column=0, pady=(0, 8), sticky=tk.W)
 
-        content_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=content_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # --- FILTROS ---
+        filtro_frame = tb.LabelFrame(frame, text="Filtros")
+        filtro_frame.grid(row=1, column=0, sticky=tk.EW, padx=2, pady=4)
+        filtro_frame.columnconfigure(1, weight=1)
+        filtro_frame.columnconfigure(3, weight=1)
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        tb.Label(content_frame, text="Relatório de Vendas", font=("Arial", 18, "bold")).pack(pady=5)
-
-        filtro_frame = tb.LabelFrame(content_frame, text="Filtros")
-        filtro_frame.pack(fill=tk.X, padx=5, pady=5, ipady=5, ipadx=5)
-
-        # Data inicial (Usando Entry comum para evitar o bug do DateEntry)
-        tb.Label(filtro_frame, text="Data Início (DD/MM/YYYY):", font=("Arial", 9)).grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
+        tb.Label(filtro_frame, text="Data Início (DD/MM/YYYY):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
         entrada_data_ini = tb.Entry(filtro_frame, width=15)
-        entrada_data_ini.insert(0, datetime.now().strftime('%d/%m/%Y')) # Sugere data de hoje
-        entrada_data_ini.grid(row=0, column=1, padx=5, pady=3)
-        
-        # Data final
-        tb.Label(filtro_frame, text="Data Fim (DD/MM/YYYY):", font=("Arial", 9)).grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
+        entrada_data_ini.insert(0, datetime.now().strftime('%d/%m/%Y'))
+        entrada_data_ini.grid(row=0, column=1, padx=5, pady=3, sticky=tk.W)
+
+        tb.Label(filtro_frame, text="Data Fim (DD/MM/YYYY):").grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
         entrada_data_fim = tb.Entry(filtro_frame, width=15)
         entrada_data_fim.insert(0, datetime.now().strftime('%d/%m/%Y'))
-        entrada_data_fim.grid(row=0, column=3, padx=5, pady=3)
+        entrada_data_fim.grid(row=0, column=3, padx=5, pady=3, sticky=tk.W)
 
-        # Forma de pagamento
-        tb.Label(filtro_frame, text="Forma de Pagamento:", font=("Arial", 9)).grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
-        entrada_pagamento = tb.Combobox(filtro_frame, values=["Dinheiro", "Cartão", "PIX", "Nenhum"], width=13)
-        entrada_pagamento.grid(row=1, column=1, padx=5, pady=3)
+        tb.Label(filtro_frame, text="Forma de Pagamento:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
+        entrada_pagamento = tb.Combobox(filtro_frame,
+            values=["", "DINHEIRO", "PIX", "CARTAO DE DEBITO", "CARTAO DE CREDITO"], width=20)
+        entrada_pagamento.grid(row=1, column=1, padx=5, pady=3, sticky=tk.W)
 
-        # Status
-        tb.Label(filtro_frame, text="Status:", font=("Arial", 9)).grid(row=1, column=2, sticky=tk.W, padx=5, pady=3)
-        entrada_status = tb.Combobox(filtro_frame, values=["aberto", "finalizado", "cancelado"], width=13)
-        entrada_status.grid(row=1, column=3, padx=5, pady=3)
+        tb.Label(filtro_frame, text="Status:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=3)
+        entrada_status = tb.Combobox(filtro_frame, values=["", "aberto", "finalizado", "cancelado"], width=15)
+        entrada_status.grid(row=1, column=3, padx=5, pady=3, sticky=tk.W)
 
-        # Cliente
-        tb.Label(filtro_frame, text="Cliente:", font=("Arial", 9)).grid(row=2, column=0, sticky=tk.W, padx=5, pady=3)
+        tb.Label(filtro_frame, text="Cliente:").grid(row=2, column=0, sticky=tk.W, padx=5, pady=3)
         clientes = self.cliente.listar()
-        cliente_combo = tb.Combobox(filtro_frame, values=[f"{c[0]} - {c[1]}" for c in clientes], width=30)
+        cliente_combo = tb.Combobox(filtro_frame,
+            values=[""] + [f"{c[0]} - {c[1]}" for c in clientes], width=35)
         cliente_combo.grid(row=2, column=1, columnspan=3, padx=5, pady=3, sticky=tk.W)
 
-        # Vendedor
-        tb.Label(filtro_frame, text="Vendedor:", font=("Arial", 9)).grid(row=3, column=0, sticky=tk.W, padx=5, pady=3)
+        tb.Label(filtro_frame, text="Vendedor:").grid(row=3, column=0, sticky=tk.W, padx=5, pady=3)
         vendedores = self.vendedor.listar()
-        vendedor_combo = tb.Combobox(filtro_frame, values=[f"{v[0]} - {v[1]}" for v in vendedores], width=30)
+        vendedor_combo = tb.Combobox(filtro_frame,
+            values=[""] + [f"{v[0]} - {v[1]}" for v in vendedores], width=35)
         vendedor_combo.grid(row=3, column=1, columnspan=3, padx=5, pady=3, sticky=tk.W)
 
-        # Livro
-        tb.Label(filtro_frame, text="Livro:", font=("Arial", 9)).grid(row=4, column=0, sticky=tk.W, padx=5, pady=3)
+        tb.Label(filtro_frame, text="Livro:").grid(row=4, column=0, sticky=tk.W, padx=5, pady=3)
         livros = self.livro.listar()
-        livro_combo = tb.Combobox(filtro_frame, values=[f"{l[0]} - {l[1]}" for l in livros], width=30)
+        livro_combo = tb.Combobox(filtro_frame,
+            values=[""] + [f"{l[0]} - {l[1]}" for l in livros], width=35)
         livro_combo.grid(row=4, column=1, columnspan=3, padx=5, pady=3, sticky=tk.W)
 
-        # Botões de pesquisa
-        botoes_filtro = tb.Frame(content_frame)
-        botoes_filtro.pack(pady=5)
+        # --- TABELA (criada antes das funções para poder ser referenciada nelas) ---
+        colunas = ["ID", "Data", "Status", "Pagamento", "Cliente", "Vendedor", "Total"]
+        tree_container = tb.Frame(frame)
+        tree_container.grid(row=2, column=0, sticky=tk.NSEW, padx=2, pady=(0, 4))
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
 
+        tree_relatorio = tb.Treeview(tree_container, columns=colunas, show="headings")
+
+        style = tb.Style()
+        style.configure("Treeview", font=("Arial", 11), rowheight=28)
+        style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+        tree_relatorio.tag_configure("par",   background="#f0f0f0")
+        tree_relatorio.tag_configure("impar", background="#ffffff")
+
+        larguras = {"ID": 50, "Data": 160, "Status": 90, "Pagamento": 160,
+                    "Cliente": 160, "Vendedor": 130, "Total": 90}
+        for col in colunas:
+            tree_relatorio.column(col, anchor=tk.W, width=larguras[col], stretch=True)
+            tree_relatorio.heading(col, text=col, anchor=tk.W)
+
+        vsb = tb.Scrollbar(tree_container, orient=tk.VERTICAL,   command=tree_relatorio.yview)
+        hsb = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=tree_relatorio.xview)
+        tree_relatorio.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        tree_relatorio.grid(row=0, column=0, sticky=tk.NSEW)
+        vsb.grid(row=0, column=1, sticky=tk.NS)
+        hsb.grid(row=1, column=0, sticky=tk.EW)
+
+        # --- RODAPÉ ---
+        label_total = tb.Label(frame, text="Total: R$ 0.00", font=("Arial", 12, "bold"))
+        label_total.grid(row=3, column=0, sticky=tk.E, pady=4)
+
+        # --- FUNÇÕES ---
         def gerar_relatorio():
-            # Leia diretamente do widget usando .get()
-            data_ini_str = entrada_data_ini.get() 
-            data_fim_str = entrada_data_fim.get()
-            
-            # Converte para o formato do banco (YYYY-MM-DD)
             try:
-                data_ini = datetime.strptime(data_ini_str, '%d/%m/%Y').strftime('%Y-%m-%d')
-                data_fim = datetime.strptime(data_fim_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+                data_ini = datetime.strptime(entrada_data_ini.get(), '%d/%m/%Y').strftime('%Y-%m-%d')
+                data_fim = datetime.strptime(entrada_data_fim.get(), '%d/%m/%Y').strftime('%Y-%m-%d')
             except:
-                data_ini = None
-                data_fim = None
-            
-            status = entrada_status.get().strip() or None
-            pagamento = entrada_pagamento.get().strip() or None
-            cliente_id = int(cliente_combo.get().split(' - ')[0]) if cliente_combo.get() else None
+                data_ini = data_fim = None
+
+            status      = entrada_status.get().strip() or None
+            pagamento   = entrada_pagamento.get().strip() or None
+            cliente_id  = int(cliente_combo.get().split(' - ')[0])  if cliente_combo.get()  else None
             vendedor_id = int(vendedor_combo.get().split(' - ')[0]) if vendedor_combo.get() else None
-            livro_id = int(livro_combo.get().split(' - ')[0]) if livro_combo.get() else None
+            livro_id    = int(livro_combo.get().split(' - ')[0])    if livro_combo.get()    else None
 
             resultado = self.venda.buscar_vendas_relatorio(
-                data_ini=data_ini,
-                data_fim=data_fim,
+                data_ini=data_ini, data_fim=data_fim,
                 status=status,
                 metodo_pagamento=pagamento if pagamento != 'Nenhum' else None,
-                cliente_id=cliente_id,
-                vendedor_id=vendedor_id,
-                livro_id=livro_id
+                cliente_id=cliente_id, vendedor_id=vendedor_id, livro_id=livro_id
             )
 
             for i in tree_relatorio.get_children():
                 tree_relatorio.delete(i)
 
-            for row in resultado:
-                tree_relatorio.insert('', 'end', values=row)
+            total_geral = 0.0
+            for idx, row in enumerate(resultado):
+                tag = "par" if idx % 2 == 0 else "impar"
+                tree_relatorio.insert('', 'end', values=row, tags=(tag,))
+                try:
+                    total_geral += float(row[6])
+                except:
+                    pass
+            label_total.config(text=f"Total: R$ {total_geral:.2f}")
 
-        tb.Button(botoes_filtro, text="Buscar Relatório", command=gerar_relatorio).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes_filtro, text="Voltar", command=self.tela_vendas).pack(side=tk.LEFT, padx=5)
+        def limpar_filtros():
+            entrada_data_ini.delete(0, tk.END)
+            entrada_data_ini.insert(0, datetime.now().strftime('%d/%m/%Y'))
+            entrada_data_fim.delete(0, tk.END)
+            entrada_data_fim.insert(0, datetime.now().strftime('%d/%m/%Y'))
+            entrada_pagamento.set("")
+            entrada_status.set("")
+            cliente_combo.set("")
+            vendedor_combo.set("")
+            livro_combo.set("")
+            for i in tree_relatorio.get_children():
+                tree_relatorio.delete(i)
+            label_total.config(text="Total: R$ 0.00")
 
-        # Tabela de resultado
-        resultado_frame = tb.Frame(content_frame)
-        resultado_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # --- BOTÕES dentro do filtro_frame (após funções definidas) ---
+        botoes_frame = tb.Frame(filtro_frame)
+        botoes_frame.grid(row=3, column=2, columnspan=4, pady=(8, 5), padx=5, sticky=tk.W)
 
-        tree_relatorio = tb.Treeview(resultado_frame, columns=["ID", "Data", "Status", "Pagamento", "Cliente", "Vendedor", "Total"], height=15)
-        tree_relatorio.column("#0", width=0, stretch=tk.NO)
-        for col in ["ID", "Data", "Status", "Pagamento", "Cliente", "Vendedor", "Total"]:
-            tree_relatorio.column(col, anchor=tk.W, width=120)
-            tree_relatorio.heading(col, text=col, anchor=tk.W)
+        tb.Button(botoes_frame, text="🔍 Buscar Relatório", bootstyle=PRIMARY,
+                  command=gerar_relatorio).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_frame, text="🧹 Limpar Filtros", bootstyle=PRIMARY,
+                  command=limpar_filtros).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_frame, text="⬅ Voltar", bootstyle=SECONDARY,
+                  command=self.tela_vendas).pack(side=tk.LEFT, padx=5)
 
-        scrollbar_rel = tb.Scrollbar(resultado_frame, orient=tk.VERTICAL, command=tree_relatorio.yview)
-        tree_relatorio.configure(yscroll=scrollbar_rel.set)
-        scrollbar_rel.pack(side=tk.RIGHT, fill=tk.Y)
-        tree_relatorio.pack(fill=tk.BOTH, expand=True)
+        # Carrega registros de hoje ao abrir
+        gerar_relatorio()
+
+    def tela_relatorios(self):
+        self.limpar_janela()
+
+        frame = tb.Frame(self.root)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.columnconfigure(0, weight=1)
+
+        tb.Label(frame, text="Módulo de Relatórios", font=("Arial", 20, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 12))
+
+        # Filtros
+        filtro_frame = tb.LabelFrame(frame, text="Filtros")
+        filtro_frame.grid(row=1, column=0, sticky=tk.EW, padx=2, pady=4)
+        filtro_frame.columnconfigure(1, weight=1)
+
+        tb.Label(filtro_frame, text="Data Início (DD/MM/YYYY):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=3)
+        entrada_data_ini = tb.Entry(filtro_frame, width=15)
+        entrada_data_ini.insert(0, datetime.now().strftime('%d/%m/%Y'))
+        entrada_data_ini.grid(row=0, column=1, padx=5, pady=3, sticky=tk.W)
+
+        tb.Label(filtro_frame, text="Data Fim (DD/MM/YYYY):").grid(row=0, column=2, sticky=tk.W, padx=5, pady=3)
+        entrada_data_fim = tb.Entry(filtro_frame, width=15)
+        entrada_data_fim.insert(0, datetime.now().strftime('%d/%m/%Y'))
+        entrada_data_fim.grid(row=0, column=3, padx=5, pady=3, sticky=tk.W)
+
+        tb.Label(filtro_frame, text="Categoria:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=3)
+        # carregar categorias distintas
+        try:
+            categorias_rows = self.db.cursor.execute('SELECT DISTINCT categoria FROM livros WHERE categoria IS NOT NULL').fetchall()
+            categorias = [c[0] for c in categorias_rows if c[0]]
+        except Exception:
+            categorias = []
+        entrada_categoria = tb.Combobox(filtro_frame, values=[''] + categorias, width=30)
+        entrada_categoria.grid(row=1, column=1, columnspan=3, padx=5, pady=3, sticky=tk.W)
+
+        # Área para resultados (Treeview será recriado conforme relatório)
+        result_container = tb.Frame(frame)
+        result_container.grid(row=3, column=0, sticky=tk.NSEW, padx=2, pady=(8, 4))
+        result_container.rowconfigure(0, weight=1)
+        result_container.columnconfigure(0, weight=1)
+
+        def limpar_resultados():
+            for w in result_container.winfo_children():
+                w.destroy()
+
+        def gerar_relatorio_categoria():
+            limpar_resultados()
+            # parse datas
+            try:
+                data_ini = datetime.strptime(entrada_data_ini.get(), '%d/%m/%Y').strftime('%Y-%m-%d')
+                data_fim = datetime.strptime(entrada_data_fim.get(), '%d/%m/%Y').strftime('%Y-%m-%d')
+            except Exception:
+                data_ini = data_fim = None
+
+            categoria = entrada_categoria.get().strip() or None
+
+            sql = '''
+                SELECT l.titulo, l.categoria,
+                       DATE(COALESCE(v.data_pagamento, v.data_venda)) as data,
+                       SUM(iv.quantidade) as total
+                FROM itens_venda iv
+                JOIN vendas v ON iv.venda_id = v.id
+                JOIN livros l ON iv.livro_id = l.id
+                WHERE v.status = 'finalizado'
+            '''
+            params = []
+            if data_ini and data_fim:
+                sql += ' AND DATE(COALESCE(v.data_pagamento, v.data_venda)) BETWEEN ? AND ? '
+                params.extend([data_ini, data_fim])
+            if categoria:
+                sql += ' AND l.categoria = ? '
+                params.append(categoria)
+            sql += '''
+                GROUP BY l.titulo, l.categoria,
+                         DATE(COALESCE(v.data_pagamento, v.data_venda))
+                ORDER BY DATE(COALESCE(v.data_pagamento, v.data_venda)) DESC, total DESC
+            '''
+
+            try:
+                self.db.cursor.execute(sql, params)
+                rows = self.db.cursor.fetchall()
+            except Exception as e:
+                messagebox.showerror('Erro', str(e))
+                rows = []
+
+            cols = ["Livro", "Categoria", "Data", "Quantidade Vendida"]
+            tree = tb.Treeview(result_container, columns=cols, show='headings')
+            style = tb.Style()
+            style.configure("Treeview", font=("Arial", 11), rowheight=24)
+            style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+
+            for c in cols:
+                tree.column(c, anchor=tk.W, width=150)
+                tree.heading(c, text=c, anchor=tk.W)
+
+            vsb = tb.Scrollbar(result_container, orient=tk.VERTICAL, command=tree.yview)
+            hsb = tb.Scrollbar(result_container, orient=tk.HORIZONTAL, command=tree.xview)
+            tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            tree.grid(row=0, column=0, sticky=tk.NSEW)
+            vsb.grid(row=0, column=1, sticky=tk.NS)
+            hsb.grid(row=1, column=0, sticky=tk.EW)
+
+            for i, r in enumerate(rows):
+                tag = 'par' if i % 2 == 0 else 'impar'
+                tree.insert('', 'end', values=(r[0], r[1], r[2], r[3]), tags=(tag,))
+
+            if not rows:
+                messagebox.showinfo('Relatório', 'Nenhum registro encontrado para os filtros selecionados.')
+
+        def gerar_relatorio_cliente():
+            limpar_resultados()
+            try:
+                data_ini = datetime.strptime(entrada_data_ini.get(), '%d/%m/%Y').strftime('%Y-%m-%d')
+                data_fim = datetime.strptime(entrada_data_fim.get(), '%d/%m/%Y').strftime('%Y-%m-%d')
+            except Exception:
+                data_ini = data_fim = None
+
+            categoria = entrada_categoria.get().strip() or None
+
+            sql = '''
+                SELECT c.id, c.nome, l.categoria, DATE(v.data_venda) as data, SUM(iv.quantidade) as total
+                FROM vendas v
+                JOIN itens_venda iv ON iv.venda_id = v.id
+                JOIN clientes c ON v.cliente_id = c.id
+                JOIN livros l ON iv.livro_id = l.id
+                WHERE v.status = 'finalizado'
+            '''
+            params = []
+            if data_ini and data_fim:
+                sql += ' AND DATE(v.data_venda) BETWEEN ? AND ? '
+                params.extend([data_ini, data_fim])
+            if categoria:
+                sql += ' AND l.categoria = ? '
+                params.append(categoria)
+            sql += ' GROUP BY c.id, l.categoria, DATE(v.data_venda) ORDER BY total DESC'
+
+            try:
+                self.db.cursor.execute(sql, params)
+                rows = self.db.cursor.fetchall()
+            except Exception as e:
+                messagebox.showerror('Erro', str(e))
+                rows = []
+
+            cols = ["Cliente ID", "Cliente", "Categoria", "Data", "Quantidade Comprada"]
+            tree = tb.Treeview(result_container, columns=cols, show='headings')
+            style = tb.Style()
+            style.configure("Treeview", font=("Arial", 11), rowheight=24)
+            style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+
+            for c in cols:
+                tree.column(c, anchor=tk.W, width=150)
+                tree.heading(c, text=c, anchor=tk.W)
+
+            vsb = tb.Scrollbar(result_container, orient=tk.VERTICAL, command=tree.yview)
+            hsb = tb.Scrollbar(result_container, orient=tk.HORIZONTAL, command=tree.xview)
+            tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+            tree.grid(row=0, column=0, sticky=tk.NSEW)
+            vsb.grid(row=0, column=1, sticky=tk.NS)
+            hsb.grid(row=1, column=0, sticky=tk.EW)
+
+            for i, r in enumerate(rows):
+                tag = 'par' if i % 2 == 0 else 'impar'
+                tree.insert('', 'end', values=(r[0], r[1], r[2], r[3], r[4]), tags=(tag,))
+
+            if not rows:
+                messagebox.showinfo('Relatório', 'Nenhum registro encontrado para os filtros selecionados.')
+
+        botoes_frame = tb.Frame(filtro_frame)
+        botoes_frame.grid(row=2, column=0, columnspan=4, pady=(6, 2))
+        tb.Button(botoes_frame, text="Relatório por Categoria", bootstyle=PRIMARY, command=gerar_relatorio_categoria).pack(side=tk.LEFT, padx=6)
+        tb.Button(botoes_frame, text="Relatório por Cliente", bootstyle=PRIMARY, command=gerar_relatorio_cliente).pack(side=tk.LEFT, padx=6)
+        tb.Button(botoes_frame, text="Voltar", bootstyle=SECONDARY, command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=6)
 
     def tela_inventario(self):
         self.limpar_janela()
+        
         frame = tb.Frame(self.root)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(2, weight=1)
 
-        # Container rolável
-        canvas = tk.Canvas(frame)
-        scroll_y = tb.Scrollbar(frame, orient=tk.VERTICAL, command=canvas.yview)
-        content_frame = tb.Frame(canvas)
+        # --- TÍTULO ---
+        tb.Label(frame, text="Inventário de Livros", font=("Arial", 20, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 15))
 
-        content_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=content_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scroll_y.set)
+        # --- BLOCO: ENTRADA DE DADOS ---
+        entrada_frame = tb.LabelFrame(frame, text="Adicionar Item ao Inventário")
+        entrada_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        entrada_frame.columnconfigure(1, weight=1)
+        entrada_frame.columnconfigure(3, weight=1)
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        # ISBN
+        tb.Label(entrada_frame, text="ISBN:", font=("Arial", 10)).grid(
+            row=0, column=0, sticky=tk.W, padx=10, pady=5)
+        isbn_entry = tb.Entry(entrada_frame)
+        isbn_entry.grid(row=0, column=1, sticky=tk.EW, padx=10, pady=5)
 
-        tb.Label(content_frame, text="Inventário de Livros", font=("Arial", 18, "bold")).pack(pady=10)
-
-        form = tb.Frame(content_frame)
-        form.pack(fill=tk.X, pady=10)
-
-        tb.Label(form, text="ISBN:", font=("Arial", 10)).grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        isbn_entry = tb.Entry(form, width=30)
-        isbn_entry.grid(row=0, column=1, padx=5, pady=5)
-
-        tb.Label(form, text="Quantidade:", font=("Arial", 10)).grid(row=0, column=2, sticky=tk.W, padx=5, pady=5)
-        quantidade_entry = tb.Entry(form, width=10)
-        quantidade_entry.grid(row=0, column=3, padx=5, pady=5)
+        # Quantidade
+        tb.Label(entrada_frame, text="Quantidade:", font=("Arial", 10)).grid(
+            row=0, column=2, sticky=tk.W, padx=10, pady=5)
+        quantidade_entry = tb.Entry(entrada_frame, width=10)
         quantidade_entry.insert(0, "1")
+        quantidade_entry.grid(row=0, column=3, sticky=tk.W, padx=10, pady=5)
 
-        tb.Button(form, text="Bipar/Adicionar", command=lambda: adicionar_item()).grid(row=0, column=4, padx=5, pady=5)
+        # Operação
+        tb.Label(entrada_frame, text="Operação:", font=("Arial", 10)).grid(
+            row=1, column=0, sticky=tk.W, padx=10, pady=5)
+        operacao_var = tk.StringVar(value="Entrada")
+        operacao_combo = tb.Combobox(entrada_frame, values=["Entrada", "Saída"], 
+                                     textvariable=operacao_var, state="readonly", width=15)
+        operacao_combo.grid(row=1, column=1, sticky=tk.W, padx=10, pady=5)
 
-        # Dicionário de inventário temporário carregado do banco
-        inventario = {}
-
-        tree_frame = tb.Frame(content_frame)
-        tree_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-
-        tree = tb.Treeview(tree_frame, columns=["ISBN", "Título", "Quantidade", "Estoque Atual"], height=12)
-        tree.column("#0", width=0, stretch=tk.NO)
-        for col in ["ISBN", "Título", "Quantidade", "Estoque Atual"]:
-            tree.column(col, anchor=tk.W, width=140)
-            tree.heading(col, text=col, anchor=tk.W)
-
-        def carregar_inventario():
-            nonlocal inventario
-            inventario = {}
-            for livro_id, isbn, titulo, quantidade in self.livro.listar_inventario_temp():
-                livro = self.livro.buscar_por_id(livro_id)
-                atual = livro[4] if livro else 0
-                inventario[isbn] = {
-                    'id': livro_id,
-                    'titulo': titulo,
-                    'quantidade': quantidade,
-                    'atual': atual
-                }
-            atualizar_tree()
-
-        def atualizar_tree():
-            for i in tree.get_children():
-                tree.delete(i)
-            for isbn, data in inventario.items():
-                tree.insert("", "end", values=(isbn, data['titulo'], data['quantidade'], data['atual']))
-
-        carregar_inventario()
-        tree_scroll = tb.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=tree_scroll.set)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(fill=tk.BOTH, expand=True)
+        # --- BOTÕES HORIZONTAIS ---
+        botoes_frame = tb.Frame(frame)
+        botoes_frame.grid(row=3, column=0, sticky=tk.EW, pady=(10, 0))
 
         def adicionar_item():
             isbn = isbn_entry.get().strip()
@@ -1125,18 +1607,10 @@ class BibliotecaApp:
                 return
 
             carregar_inventario()
-
             isbn_entry.delete(0, tk.END)
             quantidade_entry.delete(0, tk.END)
             quantidade_entry.insert(0, "1")
             messagebox.showinfo("Sucesso", "Item adicionado ao inventário temporário.")
-
-        tipo_frame = tb.Frame(form)
-        tipo_frame.grid(row=1, column=0, columnspan=5, pady=(5, 10), sticky=tk.W)
-        tb.Label(tipo_frame, text="Operação:", font=("Arial", 10)).pack(side=tk.LEFT)
-        operacao_var = tk.StringVar(value="Entrada")
-        operacao_combo = tb.Combobox(tipo_frame, values=["Entrada", "Saída"], textvariable=operacao_var, width=10, state="readonly")
-        operacao_combo.pack(side=tk.LEFT, padx=5)
 
         def limpar_inventario():
             sucesso, msg = self.livro.limpar_inventario_temp()
@@ -1200,48 +1674,194 @@ class BibliotecaApp:
             inventario.clear()
             atualizar_tree()
 
-        botoes = tb.Frame(content_frame)
-        botoes.pack(fill=tk.X, pady=10)
+        tb.Button(botoes_frame, text="Bipar/Adicionar", bootstyle=SUCCESS,
+                 command=adicionar_item).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Limpar Inventário", bootstyle=WARNING,
+                 command=limpar_inventario).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Aplicar Inventário", bootstyle=PRIMARY,
+                 command=aplicar_inventario).pack(side=tk.LEFT, padx=3)
+        tb.Button(botoes_frame, text="Voltar", bootstyle=SECONDARY,
+                 command=self.criar_tela_inicial).pack(side=tk.LEFT, padx=3)
 
-        tb.Button(botoes, text="Aplicar Inventário", command=aplicar_inventario).pack(side=tk.RIGHT, padx=5)
-        tb.Button(botoes, text="Limpar Inventário", command=limpar_inventario).pack(side=tk.RIGHT, padx=5)
-        tb.Button(botoes, text="Voltar", command=self.tela_livros).pack(side=tk.RIGHT, padx=5)
+        # Dicionário de inventário temporário
+        inventario = {}
+
+        # --- TREEVIEW COM SCROLLBARS ---
+        tree_container = tb.Frame(frame)
+        tree_container.grid(row=2, column=0, sticky=tk.NSEW, pady=(0, 10))
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
+
+        tree = tb.Treeview(tree_container, columns=["ISBN", "Título", "Quantidade", "Estoque Atual"], height=15)
+        
+        style = tb.Style()
+        style.configure("Treeview", font=("Arial", 11), rowheight=25)
+        style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+
+        tree_scroll_y = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=tree.yview)
+        tree_scroll_x = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
+
+        tree.grid(row=0, column=0, sticky="nsew")
+        tree_scroll_y.grid(row=0, column=1, sticky="ns")
+        tree_scroll_x.grid(row=1, column=0, sticky="ew")
+
+        tree.column("#0", width=0, stretch=tk.NO)
+        for col in ["ISBN", "Título", "Quantidade", "Estoque Atual"]:
+            tree.column(col, anchor=tk.W, width=150, minwidth=100, stretch=True)
+            tree.heading(col, text=col, anchor=tk.W)
+
+        def carregar_inventario():
+            nonlocal inventario
+            inventario = {}
+            for livro_id, isbn, titulo, quantidade in self.livro.listar_inventario_temp():
+                livro = self.livro.buscar_por_id(livro_id)
+                atual = livro[4] if livro else 0
+                inventario[isbn] = {
+                    'id': livro_id,
+                    'titulo': titulo,
+                    'quantidade': quantidade,
+                    'atual': atual
+                }
+            atualizar_tree()
+
+        def atualizar_tree():
+            for i in tree.get_children():
+                tree.delete(i)
+            for i, (isbn, data) in enumerate(inventario.items()):
+                tag = "par" if i % 2 == 0 else "impar"
+                tree.insert("", "end", values=(isbn, data['titulo'], data['quantidade'], data['atual']), tags=(tag,))
+
+        carregar_inventario()
 
     def nova_venda(self):
-        # Janela para selecionar vendedor e cliente
+        # Janela para selecionar vendedor e cliente (com busca por nome e botão de novo cliente)
         janela = tk.Toplevel(self.root)
         janela.title("Nova Venda")
-        janela.geometry("400x300")
-        
-        frame = tb.Frame(janela)
-        frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
-        tb.Label(frame, text="Vendedor:", font=("Arial", 10)).pack(anchor=tk.W, pady=(10, 2))
+        largura_tela = janela.winfo_screenwidth()
+        altura_tela = janela.winfo_screenheight()
+        largura = min(720, max(560, int(largura_tela * 0.42)))
+        altura = min(520, max(400, int(altura_tela * 0.52)))
+        pos_x = max(0, (largura_tela - largura) // 2)
+        pos_y = max(0, (altura_tela - altura) // 2)
+        janela.geometry(f"{largura}x{altura}+{pos_x}+{pos_y}")
+        janela.minsize(500, 380)
+        janela.resizable(True, True)
+        janela.transient(self.root)
+
+        frame = tb.Frame(janela, padding=(28, 24))
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(4, weight=1)
+
+        tb.Label(frame, text="Nova Venda", font=("Arial", 20, "bold"),
+                 bootstyle=PRIMARY).grid(row=0, column=0, sticky=tk.W, pady=(0, 20))
+
+        tb.Label(frame, text="Vendedor", font=("Arial", 13, "bold")).grid(
+            row=1, column=0, sticky=tk.W, pady=(0, 6))
         vendedores = self.vendedor.listar()
         vendedor_combo = tb.Combobox(frame, values=[f"{v[0]} - {v[1]}" for v in vendedores], state="readonly")
-        vendedor_combo.pack(pady=(0, 15), fill=tk.X)
-        
-        tb.Label(frame, text="Cliente:", font=("Arial", 10)).pack(anchor=tk.W, pady=(10, 2))
+        vendedor_combo.configure(font=("Arial", 13))
+        vendedor_combo.grid(row=2, column=0, sticky="ew", pady=(0, 18), ipady=4)
+
+        tb.Label(frame, text="Cliente", font=("Arial", 13, "bold")).grid(
+            row=3, column=0, sticky=tk.NW, pady=(0, 6))
+
+        # linha com Combobox (auto-complete) + botão 'Novo Cliente'
+        cliente_row = tb.Frame(frame)
+        cliente_row.grid(row=4, column=0, sticky="new", pady=(0, 20))
+        cliente_row.columnconfigure(0, weight=1)
+
         clientes = self.cliente.listar()
-        cliente_combo = tb.Combobox(frame, values=[f"{c[0]} - {c[1]}" for c in clientes], state="readonly")
-        cliente_combo.pack(pady=(0, 20), fill=tk.X)
-        
+        cliente_combo = tb.Combobox(cliente_row, values=[f"{c[0]} - {c[1]}" for c in clientes], state="normal")
+        cliente_combo.configure(font=("Arial", 13))
+        cliente_combo.grid(row=0, column=0, sticky="ew", padx=(0, 10), ipady=4)
+
+        def abrir_novo_cliente():
+            # Abre o formulário de adicionar cliente e atualiza a combobox ao retornar
+            def refresh_and_select():
+                atualizar_clientes()
+                ultimo = self.cliente.ultimo_adicionado()
+                if ultimo:
+                    cliente_combo.set(f"{ultimo[0]} - {ultimo[1]}")
+                # Garante que a janela "Nova Venda" volte ao topo e receba foco
+                try:
+                    janela.deiconify()
+                    janela.lift()
+                    janela.focus_force()
+                except Exception:
+                    pass
+
+            self.janela_formulario("Adicionar Cliente",
+                                  [("Nome", "entry", ""), ("Email", "entry", ""), ("Telefone", "entry", ""), ("Endereco", "entry", "")],
+                                  lambda dados: self.cliente.adicionar(*dados),
+                                  refresh_and_select,
+                                  parent=janela)
+
+        tb.Button(cliente_row, text="Novo Cliente", command=abrir_novo_cliente,
+              bootstyle=INFO, padding=(12, 8)).grid(row=0, column=1, sticky=tk.E)
+
+        def atualizar_clientes(termo=""):
+            if termo and termo.strip():
+                encontrados = self.cliente.buscar_por_nome(termo.strip())
+            else:
+                encontrados = self.cliente.listar()
+            valores = [f"{c[0]} - {c[1]}" for c in encontrados]
+            cliente_combo['values'] = valores
+
+        def on_cliente_key(event=None):
+            texto = cliente_combo.get().strip()
+            atualizar_clientes(texto)
+            if cliente_combo['values']:
+                cliente_combo.after_idle(
+                    lambda: cliente_combo.tk.call("ttk::combobox::Post", cliente_combo._w)
+                )
+            else:
+                cliente_combo.tk.call("ttk::combobox::Unpost", cliente_combo._w)
+
+        # Bind para buscar enquanto digita
+        cliente_combo.bind('<KeyRelease>', on_cliente_key)
+
         def iniciar():
-            if not vendedor_combo.get() or not cliente_combo.get():
-                messagebox.showwarning("Aviso", "Selecione vendedor e cliente!")
+            if not vendedor_combo.get():
+                messagebox.showwarning("Aviso", "Selecione um vendedor!")
                 return
-            
+
+            # Determinar cliente selecionado
+            cliente_text = cliente_combo.get().strip()
+            cliente_id = None
+            if ' - ' in cliente_text:
+                try:
+                    cliente_id = int(cliente_text.split(' - ')[0])
+                except Exception:
+                    cliente_id = None
+            else:
+                # tenta buscar pelo nome digitado e pega o primeiro resultado
+                if cliente_text:
+                    encontrados = self.cliente.buscar_por_nome(cliente_text)
+                    if encontrados:
+                        cliente_id = encontrados[0][0]
+
+            if not cliente_id:
+                messagebox.showwarning("Aviso", "Selecione ou informe um cliente válido!")
+                return
+
             vendedor_id = int(vendedor_combo.get().split(" - ")[0])
-            cliente_id = int(cliente_combo.get().split(" - ")[0])
-            
+
             sucesso, venda_id, msg = self.venda.criar_venda(vendedor_id, cliente_id)
             if sucesso:
                 janela.destroy()
                 self.editar_venda(venda_id)
             else:
                 messagebox.showerror("Erro", msg)
-        
-        tb.Button(frame, text="Iniciar Venda", command=iniciar).pack(pady=20)
+
+        tb.Button(frame, text="Iniciar Venda", command=iniciar,
+                  bootstyle=SUCCESS, padding=(18, 10)).grid(
+                      row=5, column=0, sticky=tk.EW, pady=(8, 0))
+
+        janela.bind("<Return>", lambda event: iniciar())
+        janela.bind("<Escape>", lambda event: janela.destroy())
+        janela.after(100, lambda: vendedor_combo.focus_set())
     
     def editar_venda(self, venda_id):
         self.venda_id_atual = venda_id
@@ -1260,15 +1880,17 @@ class BibliotecaApp:
         items_frame = tb.LabelFrame(frame, text="Itens da Venda")
         items_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        self.tree_itens = tb.Treeview(items_frame, columns=["ID", "Livro", "Qtd", "Preco", "Subtotal"], height=10)
+        self.tree_itens = tb.Treeview(items_frame, columns=["ID", "Livro", "Qtd", "Pago", "Saldo", "Preco", "Subtotal"], height=10)
         self.tree_itens.column("#0", width=0, stretch=tk.NO)
-        for col in ["ID", "Livro", "Qtd", "Preco", "Subtotal"]:
+        for col in ["ID", "Livro", "Qtd", "Pago", "Saldo", "Preco", "Subtotal"]:
             self.tree_itens.column(col, anchor=tk.W, width=100)
             self.tree_itens.heading(col, text=col, anchor=tk.W)
         
         itens = self.venda.listar_itens_venda(venda_id)
         for item in itens:
-            self.tree_itens.insert("", "end", values=(item[0], item[2], item[3], f"{item[4]:.2f}", f"{item[5]:.2f}"))
+            saldo = item[3] - item[6]
+            self.tree_itens.insert("", "end", values=(item[0], item[2], item[3], item[6], saldo,
+                                                        f"{item[4]:.2f}", f"{item[5]:.2f}"))
         
         scrollbar = tb.Scrollbar(items_frame, orient=tk.VERTICAL, command=self.tree_itens.yview)
         self.tree_itens.configure(yscroll=scrollbar.set)
@@ -1278,9 +1900,14 @@ class BibliotecaApp:
         # Botões de ação
         botoes_itens = tb.Frame(frame)
         botoes_itens.pack(pady=10)
-        tb.Button(botoes_itens, text="Adicionar Livro", command=self.adicionar_livro_venda).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes_itens, text="Editar Item", command=self.editar_item_venda).pack(side=tk.LEFT, padx=5)
-        tb.Button(botoes_itens, text="Remover Item", command=self.remover_item_venda).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_itens, text="Adicionar Livro", command=self.adicionar_livro_venda,
+                bootstyle=PRIMARY, width=18, padding=(10, 10)).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_itens, text="Editar Item", command=self.editar_item_venda,
+                bootstyle=WARNING, width=18, padding=(10, 10)).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_itens, text="Remover Item", command=self.remover_item_venda,
+                bootstyle=DANGER, width=18, padding=(10, 10)).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_itens, text="Dar Baixa Parcial", command=self.pagar_item_venda,
+                bootstyle=SUCCESS, width=18, padding=(10, 10)).pack(side=tk.LEFT, padx=5)
         
         # Total e pagamento
         total_frame = tb.Frame(frame)
@@ -1292,131 +1919,205 @@ class BibliotecaApp:
         botoes_finais = tb.Frame(frame)
         botoes_finais.pack(pady=10)
         
-        if venda[4] == 'aberto':
-            tb.Button(botoes_finais, text="Finalizar e Pagar", command=self.finalizar_venda).pack(side=tk.LEFT, padx=5)
-            tb.Button(botoes_finais, text="Deixar em Aberto", command=self.tela_vendas).pack(side=tk.LEFT, padx=5)
+        if venda[4] in ('aberto', 'parcial'):
+            tb.Button(botoes_finais, text="Finalizar e Pagar", command=self.finalizar_venda,
+                      bootstyle=SUCCESS, width=18, padding=(10, 10)).pack(side=tk.LEFT, padx=5)
+            tb.Button(botoes_finais, text="Deixar em Aberto", command=self.tela_vendas,
+                      bootstyle=INFO, width=18, padding=(10, 10)).pack(side=tk.LEFT, padx=5)
         else:
             tb.Label(botoes_finais, text=f"Pagamento: {venda[6]} em {venda[7]}", font=("Arial", 10)).pack(side=tk.LEFT, padx=20)
         
-        tb.Button(botoes_finais, text="Voltar", command=self.tela_vendas).pack(side=tk.LEFT, padx=5)
+        tb.Button(botoes_finais, text="Voltar", command=self.tela_vendas,
+              bootstyle=SECONDARY, width=18, padding=(10, 10)).pack(side=tk.LEFT, padx=5)
         
         self.atualizar_venda_display = lambda: self.editar_venda(venda_id)
+
+    def pagar_item_venda(self):
+        """Registra a baixa de uma quantidade do item selecionado."""
+        selecao = self.tree_itens.selection()
+        if not selecao:
+            messagebox.showwarning("Aviso", "Selecione um item para dar baixa.")
+            return
+
+        valores = self.tree_itens.item(selecao[0])['values']
+        item_id = int(valores[0])
+        saldo = int(valores[4])
+        if saldo <= 0:
+            messagebox.showinfo("Pagamento", "Este item já está totalmente pago.")
+            return
+
+        janela = tk.Toplevel(self.root)
+        janela.title("Baixa parcial do item")
+        largura_tela = janela.winfo_screenwidth()
+        altura_tela = janela.winfo_screenheight()
+        largura = min(480, max(400, largura_tela - 80))
+        altura = min(320, max(280, altura_tela - 120))
+        janela.geometry(f"{largura}x{altura}")
+        janela.minsize(400, 280)
+        janela.resizable(True, True)
+        frame = tb.Frame(janela, padding=15)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        tb.Label(frame, text=f"{valores[1]}\nSaldo: {saldo} unidade(s)",
+                 font=("Arial", 11, "bold"), justify=tk.LEFT).pack(anchor=tk.W, pady=(0, 12))
+        tb.Label(frame, text="Quantidade paga:").pack(anchor=tk.W)
+        entrada_qtd = tb.Entry(frame)
+        entrada_qtd.insert(0, str(saldo))
+        entrada_qtd.pack(fill=tk.X, pady=(3, 10))
+        tb.Label(frame, text="Forma de pagamento:").pack(anchor=tk.W)
+        metodo = tb.Combobox(frame, values=["DINHEIRO", "PIX", "CARTAO DE DEBITO", "CARTAO DE CREDITO"],
+                             state="readonly")
+        metodo.set("PIX")
+        metodo.pack(fill=tk.X, pady=(3, 15))
+
+        def confirmar():
+            try:
+                quantidade = int(entrada_qtd.get())
+            except ValueError:
+                messagebox.showerror("Erro", "Informe uma quantidade válida.")
+                return
+            sucesso, mensagem = self.venda.registrar_pagamento_item(item_id, quantidade, metodo.get())
+            if sucesso:
+                janela.destroy()
+                messagebox.showinfo("Pagamento", mensagem)
+                self.atualizar_venda_display()
+            else:
+                messagebox.showerror("Erro", mensagem)
+
+        botoes = tb.Frame(frame)
+        botoes.pack(fill=tk.X, pady=(0, 2))
+        botoes.columnconfigure(0, weight=1)
+        botoes.columnconfigure(1, weight=1)
+        tb.Button(botoes, text="Confirmar baixa", command=confirmar, bootstyle=SUCCESS).grid(
+            row=0, column=0, padx=(0, 8), sticky="ew")
+        tb.Button(botoes, text="Cancelar", command=janela.destroy, bootstyle=SECONDARY).grid(
+            row=0, column=1, sticky="ew")
     
     def adicionar_livro_venda(self):
         janela = tk.Toplevel(self.root)
         janela.title("Adicionar Livro")
-        janela.geometry("520x460")
-        
-        frame = tb.Frame(janela)
-        frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
-        
-        # Campos de pesquisa
+        janela.geometry("720x520")
+        janela.minsize(520, 360)
+        janela.resizable(True, True)
+
+        frame = tb.Frame(janela, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        # Campos de pesquisa organizados em grid responsivo
         procura_frame = tb.Frame(frame)
-        procura_frame.pack(fill=tk.X, pady=(0, 10))
-        
+        procura_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        procura_frame.columnconfigure(1, weight=1)
+
         tb.Label(procura_frame, text="Nome do Livro:", font=("Arial", 10)).grid(row=0, column=0, sticky=tk.W, pady=2)
-        entrada_nome_livro = tb.Entry(procura_frame, width=30)
-        entrada_nome_livro.grid(row=0, column=1, padx=5, pady=2)
-        
+        entrada_nome_livro = tb.Entry(procura_frame)
+        entrada_nome_livro.grid(row=0, column=1, padx=5, pady=2, sticky="ew")
+
         tb.Label(procura_frame, text="ISBN:", font=("Arial", 10)).grid(row=1, column=0, sticky=tk.W, pady=2)
-        entrada_isbn_livro = tb.Entry(procura_frame, width=30)
-        entrada_isbn_livro.grid(row=1, column=1, padx=5, pady=2)
-        
+        entrada_isbn_livro = tb.Entry(procura_frame)
+        entrada_isbn_livro.grid(row=1, column=1, padx=5, pady=2, sticky="ew")
+
+        buscar_btn = tb.Button(procura_frame, text="Buscar", bootstyle=INFO)
+        buscar_btn.grid(row=0, column=2, rowspan=2, padx=(8,0), sticky="ns")
+
+        # Lista de livros encontrados com scrollbars e comportamento responsivo
+        tree_container = tb.Frame(frame)
+        tree_container.grid(row=1, column=0, sticky="nsew")
+        tree_container.columnconfigure(0, weight=1)
+        tree_container.rowconfigure(0, weight=1)
+
+        style = tb.Style()
+        style.configure("Treeview", font=("Arial", 11), rowheight=26)
+        style.configure("Treeview.Heading", font=("Arial", 11, "bold"))
+
+        tree_livros = tb.Treeview(tree_container, columns=["ID", "Titulo", "ISBN", "Quantidade", "Preco"], show='headings')
+        for col in ["ID", "Titulo", "ISBN", "Quantidade", "Preco"]:
+            tree_livros.heading(col, text=col)
+            tree_livros.column(col, anchor=tk.W, minwidth=80, width=140, stretch=True)
+
+        vsb = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=tree_livros.yview)
+        hsb = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=tree_livros.xview)
+        tree_livros.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        tree_livros.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        # Quantidade e preço alinhados à direita para clareza
+        form_frame = tb.Frame(frame)
+        form_frame.grid(row=2, column=0, sticky="ew", pady=8)
+        form_frame.columnconfigure(0, weight=1)
+        campos_frame = tb.Frame(form_frame)
+        campos_frame.grid(row=0, column=0, sticky="e")
+
+        tb.Label(campos_frame, text="Quantidade:").grid(row=0, column=0, padx=5)
+        entrada_qtd = tb.Entry(campos_frame, width=8)
+        entrada_qtd.grid(row=0, column=1, padx=5)
+        entrada_qtd.insert(0, "1")
+
+        tb.Label(campos_frame, text="Preço Unitário:").grid(row=0, column=2, padx=5)
+        entrada_preco = tb.Entry(campos_frame, width=12)
+        entrada_preco.grid(row=0, column=3, padx=5)
+
+        # Função de busca populando o Treeview
         def buscar():
             tree_livros.delete(*tree_livros.get_children())
             termo_nome = entrada_nome_livro.get().strip()
             termo_isbn = entrada_isbn_livro.get().strip()
 
-            termo = None
-            if termo_isbn:
-                termo = termo_isbn
-            elif termo_nome:
-                termo = termo_nome
-
-            if termo:
+            termo = termo_isbn or termo_nome
+            if termo is not None and termo != "":
                 livros = self.venda.buscar_livro(termo)
                 for livro in livros:
-                    # livro: (id, titulo, isbn, preco_venda)
-                    tree_livros.insert("", "end", values=(livro[0], livro[1], livro[2], f"R$ {livro[3]:.2f}"))
-        
+                    tree_livros.insert("", "end", values=(livro[0], livro[1], livro[2], livro[4], f"R$ {livro[3]:.2f}"))
+
         def buscar_auto(event=None):
             buscar()
-        
-        # Bind events for auto-search
+
+        buscar_btn.config(command=buscar)
         entrada_nome_livro.bind('<KeyRelease>', buscar_auto)
         entrada_isbn_livro.bind('<KeyRelease>', buscar_auto)
-        
-        tb.Button(frame, text="Buscar", command=buscar).pack(pady=5)
-
-        # Lista de livros encontrados
-        tree_livros = tb.Treeview(frame, columns=["ID", "Titulo", "ISBN", "Preco"], height=8)
-        tree_livros.column("#0", width=0, stretch=tk.NO)
-        for col in ["ID", "Titulo", "ISBN", "Preco"]:
-            tree_livros.column(col, anchor=tk.W, width=130)
-            tree_livros.heading(col, text=col, anchor=tk.W)
-        tree_livros.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        # Quantidade e preço
-        # --- CAMPOS DE ENTRADA (Qtd e Preço) ---
-        form_frame = tb.Frame(frame)
-        form_frame.pack(fill=tk.X, pady=10)
-        
-        tb.Label(form_frame, text="Quantidade:").pack(side=tk.LEFT, padx=5)
-        entrada_qtd = tb.Entry(form_frame, width=10)
-        entrada_qtd.pack(side=tk.LEFT, padx=5)
-        entrada_qtd.insert(0, "1")
-        
-        tb.Label(form_frame, text="Preço Unitário:").pack(side=tk.LEFT, padx=5)
-        entrada_preco = tb.Entry(form_frame, width=10)
-        entrada_preco.pack(side=tk.LEFT, padx=5)
 
         # Preenche o preço automaticamente ao selecionar o livro na lista
         def preencher_preco(event=None):
             selecao = tree_livros.selection()
             if selecao:
                 item = tree_livros.item(selecao)['values']
-                # Remove "R$ " e troca vírgula por ponto para o Entry aceitar
-                preco_limpo = str(item[3]).replace("R$ ", "").replace(",", ".")
+                preco_text = str(item[4]).replace("R$ ", "").replace(",", ".")
                 entrada_preco.delete(0, tk.END)
-                entrada_preco.insert(0, preco_limpo)
+                entrada_preco.insert(0, preco_text)
 
         tree_livros.bind('<<TreeviewSelect>>', preencher_preco)
 
-        # --- FUNÇÃO DO BOTÃO INCLUIR ---
+        # Confirmar inclusão
         def confirmar_inclusao():
             selecao = tree_livros.selection()
             if not selecao:
                 messagebox.showwarning("Aviso", "Selecione um livro na lista!")
                 return
-            
             try:
-                # Captura os dados
                 livro_id = int(tree_livros.item(selecao)['values'][0])
                 quantidade = int(entrada_qtd.get())
                 preco = float(entrada_preco.get().replace(',', '.'))
 
-                # Grava no banco através da sua classe Venda
                 sucesso, msg = self.venda.adicionar_item(self.venda_id_atual, livro_id, quantidade, preco)
-                
                 if sucesso:
                     messagebox.showinfo("Sucesso", "Item adicionado!")
-                    janela.destroy()  # Fecha a janela de busca
-                    self.atualizar_venda_display()  # Atualiza a lista de itens da venda principal
+                    janela.destroy()
+                    self.atualizar_venda_display()
                 else:
                     messagebox.showerror("Erro", msg)
-
             except ValueError:
                 messagebox.showerror("Erro", "Quantidade ou Preço inválidos!")
 
-        # --- BOTÕES FINAIS DA JANELA ---
+        # Botões finais alinhados e com comportamento responsivo
         button_frame = tb.Frame(frame)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        tb.Button(button_frame, text="✅ Incluir na Venda", 
-                   command=confirmar_inclusao).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
-        
-        tb.Button(button_frame, text="❌ Cancelar", 
-                   command=janela.destroy).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        button_frame.grid(row=3, column=0, sticky="ew", pady=(6,0))
+        button_frame.columnconfigure((0,1), weight=1)
+
+        tb.Button(button_frame, text="✅ Incluir na Venda", command=confirmar_inclusao, bootstyle=SUCCESS).grid(row=0, column=0, padx=5, sticky="ew")
+        tb.Button(button_frame, text="❌ Cancelar", command=janela.destroy, bootstyle=SECONDARY).grid(row=0, column=1, padx=5, sticky="ew")
     
     def incluir_livro_rapido(self):
         """Método rápido para incluir livro diretamente na venda"""
@@ -1655,44 +2356,43 @@ class BibliotecaApp:
         
         janela = tk.Toplevel(self.root)
         janela.title("Continuar Venda")
-        janela.geometry("600x400")
-        janela.minsize(500, 320)
+        janela.geometry("700x450")
+        janela.minsize(600, 380)
 
-        container = tb.Frame(janela)
-        container.pack(fill=tk.BOTH, expand=True)
+        frame = tb.Frame(janela)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=0)
+        frame.rowconfigure(1, weight=1)
+        frame.rowconfigure(2, weight=0)
 
-        canvas = tk.Canvas(container)
-        scroll_y = tb.Scrollbar(container, orient=tk.VERTICAL, command=canvas.yview)
-        inner = tb.Frame(canvas)
+        tb.Label(frame, text="Vendas Abertas", font=("Arial", 14, "bold")).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 10))
 
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=scroll_y.set)
+        tree_container = tb.Frame(frame)
+        tree_container.grid(row=1, column=0, sticky=tk.NSEW, pady=(0, 10))
+        tree_container.rowconfigure(0, weight=1)
+        tree_container.columnconfigure(0, weight=1)
 
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-
-        tb.Label(inner, text="Vendas Abertas:", font=("Arial", 11, "bold")).pack(anchor=tk.W, pady=10, padx=10)
-
-        tree_frame = tb.Frame(inner)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10)
-
-        tree = tb.Treeview(tree_frame, columns=["ID", "Vendedor", "Cliente", "Data", "Total"], height=12)
+        tree = tb.Treeview(tree_container, columns=["ID", "Vendedor", "Cliente", "Data", "Total"], height=12)
         tree.column("#0", width=0, stretch=tk.NO)
         for col in ["ID", "Vendedor", "Cliente", "Data", "Total"]:
-            tree.column(col, anchor=tk.W, width=100)
+            tree.column(col, anchor=tk.W, width=120, minwidth=100, stretch=True)
             tree.heading(col, text=col, anchor=tk.W)
 
-        tree_scroll = tb.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=tree_scroll.set)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(fill=tk.BOTH, expand=True)
+        tree_scroll_y = tb.Scrollbar(tree_container, orient=tk.VERTICAL, command=tree.yview)
+        tree_scroll_x = tb.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
+        
+        tree.grid(row=0, column=0, sticky=tk.NSEW)
+        tree_scroll_y.grid(row=0, column=1, sticky=tk.NS)
+        tree_scroll_x.grid(row=1, column=0, sticky=tk.EW)
 
         for venda in vendas_abertas:
             tree.insert("", "end", values=(venda[0], venda[1], venda[2], venda[3][:10], f"R$ {venda[4]:.2f}"))
 
-        btn_frame = tb.Frame(inner)
-        btn_frame.pack(fill=tk.X, pady=10, padx=10)
+        btn_frame = tb.Frame(frame)
+        btn_frame.grid(row=2, column=0, sticky=tk.E, pady=(10, 0))
 
         def abrir_venda():
             if not tree.selection():
@@ -1702,8 +2402,31 @@ class BibliotecaApp:
             venda_id = int(tree.item(tree.selection())['values'][0])
             janela.destroy()
             self.editar_venda(venda_id)
+        def remover_venda():
+            if not tree.selection():
+                messagebox.showwarning("Aviso", "Selecione uma venda para remover!")
+                return
 
-        tb.Button(btn_frame, text="Continuar", command=abrir_venda).pack(side=tk.RIGHT)
+            venda_id = int(tree.item(tree.selection())['values'][0])
+            if not messagebox.askyesno("Confirmacao", "Deseja realmente remover uma venda?"):
+                return
+
+            sucesso, msg = self.venda.deletar_venda(venda_id)
+            messagebox.showinfo("Resultado", msg)
+            if sucesso:
+                # Recarregar lista de vendas abertas na tree
+                try:
+                    for i in tree.get_children():
+                        tree.delete(i)
+                    novas = self.venda.listar_vendas_abertas()
+                    for venda in novas:
+                        tree.insert("", "end", values=(venda[0], venda[1], venda[2], venda[3][:10], f"R$ {venda[4]:.2f}"))
+                except Exception:
+                    pass
+
+        tb.Button(btn_frame, text="Continuar", bootstyle=SUCCESS, command=abrir_venda).pack(side=tk.LEFT, padx=5)
+        tb.Button(btn_frame, text="Remover", bootstyle=DANGER, command=remover_venda).pack(side=tk.LEFT, padx=5)
+        tb.Button(btn_frame, text="Cancelar", bootstyle=SECONDARY, command=janela.destroy).pack(side=tk.LEFT, padx=5)
     
     def historico_vendas(self):
         vendas = self.venda.listar_todas_vendas()
@@ -1746,8 +2469,16 @@ class BibliotecaApp:
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         tree.pack(fill=tk.BOTH, expand=True)
     
-    def janela_formulario(self, titulo, campos, callback, refresh_callback):
-        janela = tk.Toplevel(self.root)
+    def janela_formulario(self, titulo, campos, callback, refresh_callback, parent=None):
+        # Se um parent for passado, o Toplevel será filho dele (útil para manter o foco correto)
+        topo_parent = parent if parent is not None else self.root
+        janela = tk.Toplevel(topo_parent)
+        if parent is not None:
+            try:
+                janela.transient(parent)
+                janela.grab_set()
+            except Exception:
+                pass
         janela.title(titulo)
         janela.geometry("450x500")
         janela.resizable(True, True)

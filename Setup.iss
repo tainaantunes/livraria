@@ -3,7 +3,7 @@
 ; Non-commercial use only
 
 #define MyAppName "Livraria_GEF"
-#define MyAppVersion "1.5"
+#define MyAppVersion "1.6"
 #define MyAppPublisher "My Company, Inc."
 #define MyAppURL "https://www.example.com/"
 #define MyAppExeName "main.exe"
@@ -48,7 +48,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "C:\Users\taina\Downloads\biblioteca\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "C:\Users\taina\Downloads\biblioteca\dist\SistemaLivraria.exe"; DestDir: "{app}"; DestName: "main.exe"; Flags: ignoreversion
 Source: "C:\Users\taina\Downloads\biblioteca\biblioteca.db"; DestDir: "{app}"; Flags: uninsneveruninstall onlyifdoesntexist
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 

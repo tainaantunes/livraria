@@ -41,3 +41,20 @@ class Cliente:
     def buscar_por_id(self, id):
         self.db.cursor.execute('SELECT * FROM clientes WHERE id=?', (id,))
         return self.db.cursor.fetchone()
+
+    def buscar_por_nome(self, termo):
+        """Retorna lista de clientes cujo nome contém o termo (case-insensitive)."""
+        try:
+            like = f"%{termo}%"
+            self.db.cursor.execute('SELECT * FROM clientes WHERE LOWER(nome) LIKE LOWER(?) ORDER BY nome', (like,))
+            return self.db.cursor.fetchall()
+        except Exception:
+            return []
+
+    def ultimo_adicionado(self):
+        """Retorna o último cliente inserido (por id desc) ou None."""
+        try:
+            self.db.cursor.execute('SELECT * FROM clientes ORDER BY id DESC LIMIT 1')
+            return self.db.cursor.fetchone()
+        except Exception:
+            return None

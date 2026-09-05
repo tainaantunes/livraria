@@ -30,6 +30,7 @@ class DatabaseBiblioteca:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 titulo TEXT NOT NULL,
                 autor TEXT,
+                categoria TEXT,
                 isbn TEXT UNIQUE,
                 quantidade INTEGER,
                 preco_compra REAL,
@@ -90,6 +91,19 @@ class DatabaseBiblioteca:
                 subtotal REAL NOT NULL,
                 FOREIGN KEY (venda_id) REFERENCES vendas(id),
                 FOREIGN KEY (livro_id) REFERENCES livros(id)
+            )
+        ''')
+
+        # Histórico de pagamentos vinculados a cada item da venda
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pagamentos_venda (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_venda_id INTEGER NOT NULL,
+                quantidade INTEGER NOT NULL,
+                valor REAL NOT NULL,
+                metodo_pagamento TEXT NOT NULL,
+                data_pagamento TEXT NOT NULL,
+                FOREIGN KEY (item_venda_id) REFERENCES itens_venda(id)
             )
         ''')
 

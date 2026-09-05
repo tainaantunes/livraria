@@ -94,13 +94,83 @@ class Venda:
     def listar_itens_venda(self, venda_id):
         """Listar itens de uma venda específica"""
         self.db.cursor.execute('''
-            SELECT iv.id, iv.livro_id, l.titulo, iv.quantidade, iv.preco_unitario, iv.subtotal, iv.quantidade_devolvida
+            SELECT iv.id, iv.livro_id, l.titulo, iv.quantidade, iv.preco_unitario, iv.subtotal,
+                   COALESCE(SUM(pv.quantidade), 0) AS quantidade_paga,
+                   COALESCE(SUM(pv.valor), 0) AS valor_pago
             FROM itens_venda iv
             JOIN livros l ON iv.livro_id = l.id
+            LEFT JOIN pagamentos_venda pv ON pv.item_venda_id = iv.id
             WHERE iv.venda_id = ?
+            GROUP BY iv.id, iv.livro_id, l.titulo, iv.quantidade, iv.preco_unitario, iv.subtotal
             ORDER BY iv.id
         ''', (venda_id,))
         return self.db.cursor.fetchall()
+
+    def registrar_pagamento_item(self, item_id, quantidade, metodo_pagamento):
+        """Registra o pagamento de parte ou de todo um item da venda."""
+        try:
+            quantidade = int(quantidade)
+            if quantidade <= 0:
+                return False, "A quantidade deve ser maior que zero."
+
+            item = self.db.cursor.execute('''
+                SELECT iv.venda_id, iv.quantidade, iv.preco_unitario, v.status
+                FROM itens_venda iv
+                JOIN vendas v ON v.id = iv.venda_id
+                WHERE iv.id = ?
+            ''', (item_id,)).fetchone()
+            if not item:
+                return False, "Item da venda não encontrado."
+            if item[3] == 'finalizado':
+                return False, "Esta venda já foi finalizada."
+
+            pago = self.db.cursor.execute(
+                'SELECT COALESCE(SUM(quantidade), 0) FROM pagamentos_venda WHERE item_venda_id=?',
+                (item_id,)
+            ).fetchone()[0]
+            restante = item[1] - pago
+            if quantidade > restante:
+                return False, f"Quantidade acima do saldo. Restam {restante} unidade(s)."
+
+            agora = datetime.now().isoformat()
+            self.db.cursor.execute('''
+                INSERT INTO pagamentos_venda
+                    (item_venda_id, quantidade, valor, metodo_pagamento, data_pagamento)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (item_id, quantidade, quantidade * item[2], metodo_pagamento, agora))
+
+            pendentes = self.db.cursor.execute('''
+                SELECT COUNT(*)
+                FROM itens_venda iv
+                WHERE iv.venda_id = ?
+                  AND iv.quantidade > COALESCE((
+                      SELECT SUM(pv.quantidade) FROM pagamentos_venda pv
+                      WHERE pv.item_venda_id = iv.id
+                  ), 0)
+            ''', (item[0],)).fetchone()[0]
+
+            if pendentes == 0:
+                self.db.cursor.execute('''
+                    UPDATE vendas SET status='finalizado', metodo_pagamento=?, data_pagamento=?
+                    WHERE id=?
+                ''', (metodo_pagamento, agora, item[0]))
+                mensagem = "Item pago. Venda finalizada, pois todos os itens foram quitados."
+            else:
+                self.db.cursor.execute(
+                    """
+                    UPDATE vendas
+                    SET status='parcial', metodo_pagamento=?, data_pagamento=?
+                    WHERE id=?
+                    """,
+                    (metodo_pagamento, agora, item[0])
+                )
+                mensagem = "Pagamento do item registrado com sucesso."
+
+            self.db.conexao.commit()
+            return True, mensagem
+        except Exception as e:
+            self.db.conexao.rollback()
+            return False, f"Erro ao registrar pagamento do item: {str(e)}"
     
     def buscar_livro(self, termo):
         """Buscar livro por nome, ISBN ou ID"""
@@ -111,12 +181,12 @@ class Venda:
 
             # Se for dígitos, tenta por ID e se não encontrar tenta por ISBN exato
             if termo.isdigit():
-                self.db.cursor.execute('SELECT id, titulo, isbn, preco_venda FROM livros WHERE id=?', (int(termo),))
+                self.db.cursor.execute('SELECT id, titulo, isbn, preco_venda, quantidade FROM livros WHERE id=?', (int(termo),))
                 resultado = self.db.cursor.fetchall()
                 if resultado:
                     return resultado
                 # Não encontrou por ID, tenta pelo ISBN preciso
-                self.db.cursor.execute('SELECT id, titulo, isbn, preco_venda FROM livros WHERE isbn=?', (termo,))
+                self.db.cursor.execute('SELECT id, titulo, isbn, preco_venda, quantidade FROM livros WHERE isbn=?', (termo,))
                 resultado = self.db.cursor.fetchall()
                 if resultado:
                     return resultado
@@ -124,7 +194,7 @@ class Venda:
             # Buscar por nome OU isbn parcial (inclusivo)
             termo_like = f'%{termo}%'
             self.db.cursor.execute('''
-                SELECT id, titulo, isbn, preco_venda FROM livros
+                SELECT id, titulo, isbn, preco_venda, quantidade FROM livros
                 WHERE titulo LIKE ? OR isbn LIKE ?
             ''', (termo_like, termo_like))
             return self.db.cursor.fetchall()
@@ -143,7 +213,8 @@ class Venda:
     def buscar_vendas_relatorio(self, data_ini=None, data_fim=None, status=None, metodo_pagamento=None, cliente_id=None, vendedor_id=None, livro_id=None):
         """Buscar vendas para relatório com filtros opcionais"""
         query = '''
-            SELECT v.id, v.data_venda, v.status, v.metodo_pagamento, c.nome, ven.nome_vendedor, v.valor_total
+            SELECT v.id, COALESCE(v.data_pagamento, v.data_venda) AS data, v.status,
+                   v.metodo_pagamento, c.nome, ven.nome_vendedor, v.valor_total
             FROM vendas v
             JOIN clientes c ON v.cliente_id = c.id
             JOIN vendedores ven ON v.vendedor_id = ven.id
@@ -152,10 +223,10 @@ class Venda:
         params = []
 
         if data_ini:
-            conditions.append('date(v.data_venda) >= date(?)')
+            conditions.append('date(COALESCE(v.data_pagamento, v.data_venda)) >= date(?)')
             params.append(data_ini)
         if data_fim:
-            conditions.append('date(v.data_venda) <= date(?)')
+            conditions.append('date(COALESCE(v.data_pagamento, v.data_venda)) <= date(?)')
             params.append(data_fim)
         if status:
             conditions.append('v.status = ?')
@@ -177,19 +248,19 @@ class Venda:
         if conditions:
             query += ' WHERE ' + ' AND '.join(conditions)
 
-        query += ' ORDER BY v.data_venda DESC'
+        query += ' ORDER BY COALESCE(v.data_pagamento, v.data_venda) DESC'
 
         self.db.cursor.execute(query, tuple(params))
         return self.db.cursor.fetchall()
     
     def listar_vendas_abertas(self):
-        """Listar vendas em aberto"""
+        """Listar vendas abertas ou com pagamento parcial"""
         self.db.cursor.execute('''
             SELECT v.id, vendor.nome_vendedor, cli.nome, v.data_venda, v.valor_total
             FROM vendas v
             JOIN vendedores vendor ON v.vendedor_id = vendor.id
             JOIN clientes cli ON v.cliente_id = cli.id
-            WHERE v.status = 'aberto'
+            WHERE v.status IN ('aberto', 'parcial')
             ORDER BY v.data_venda DESC
         ''')
         return self.db.cursor.fetchall()
@@ -197,21 +268,41 @@ class Venda:
     def listar_todas_vendas(self):
         """Listar todas as vendas"""
         self.db.cursor.execute('''
-            SELECT v.id, vendor.nome_vendedor, cli.nome, v.data_venda, v.status, v.valor_total, v.metodo_pagamento
+            SELECT v.id, vendor.nome_vendedor, cli.nome,
+                   COALESCE(v.data_pagamento, v.data_venda) AS data,
+                   v.status, v.valor_total, v.metodo_pagamento
             FROM vendas v
             JOIN vendedores vendor ON v.vendedor_id = vendor.id
             JOIN clientes cli ON v.cliente_id = cli.id
-            ORDER BY v.data_venda DESC
+            ORDER BY COALESCE(v.data_pagamento, v.data_venda) DESC
         ''')
         return self.db.cursor.fetchall()
     
     def finalizar_venda(self, venda_id, metodo_pagamento):
         """Finalizar venda e registrar pagamento"""
         try:
+            agora = datetime.now().isoformat()
+            itens = self.db.cursor.execute('''
+                SELECT iv.id, iv.quantidade, iv.preco_unitario,
+                       COALESCE(SUM(pv.quantidade), 0)
+                FROM itens_venda iv
+                LEFT JOIN pagamentos_venda pv ON pv.item_venda_id = iv.id
+                WHERE iv.venda_id=?
+                GROUP BY iv.id, iv.quantidade, iv.preco_unitario
+            ''', (venda_id,)).fetchall()
+            for item_id, quantidade, preco_unitario, pago in itens:
+                restante = quantidade - pago
+                if restante > 0:
+                    self.db.cursor.execute('''
+                        INSERT INTO pagamentos_venda
+                            (item_venda_id, quantidade, valor, metodo_pagamento, data_pagamento)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (item_id, restante, restante * preco_unitario, metodo_pagamento, agora))
+
             self.db.cursor.execute('''
                 UPDATE vendas SET status=?, metodo_pagamento=?, data_pagamento=?
                 WHERE id=?
-            ''', ('finalizado', metodo_pagamento, datetime.now().isoformat(), venda_id))
+            ''', ('finalizado', metodo_pagamento, agora, venda_id))
             self.db.conexao.commit()
             return True, "Venda finalizada com sucesso!"
         except Exception as e:
@@ -223,10 +314,20 @@ class Venda:
             # Verificar status
             venda = self.obter_venda(venda_id)
             if venda and venda[4] == 'aberto':
+                # Recuperar itens para devolver ao estoque
+                itens = self.db.cursor.execute('SELECT livro_id, quantidade FROM itens_venda WHERE venda_id=?', (venda_id,)).fetchall()
+                for livro_id, quantidade in itens:
+                    try:
+                        self.db.cursor.execute('UPDATE livros SET quantidade = quantidade + ? WHERE id = ?', (quantidade, livro_id))
+                    except Exception:
+                        # se falhar para um item específico, continua com os outros
+                        pass
+
+                # Remover itens e a própria venda
                 self.db.cursor.execute('DELETE FROM itens_venda WHERE venda_id=?', (venda_id,))
                 self.db.cursor.execute('DELETE FROM vendas WHERE id=?', (venda_id,))
                 self.db.conexao.commit()
-                return True, "Venda cancelada com sucesso!"
+                return True, "Venda cancelada com sucesso! Itens devolvidos ao estoque."
             else:
                 return False, "Apenas vendas abertas podem ser deletadas!"
         except Exception as e:
