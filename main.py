@@ -15,6 +15,7 @@ import os
 import sys
 import shutil
 import stat
+import re
 import xml.etree.ElementTree as ET
 from tkinter import filedialog
 from migrations import atualizar_banco
@@ -2722,8 +2723,15 @@ class BibliotecaApp:
                     prod = det.find('nfe:prod', ns)
                     
                     xProd = prod.find('nfe:xProd', ns).text
-                    nome_livro = xProd.split('-')[0].strip()
+                    nome_produto = re.sub(r'^normal\s*-\s*', '', xProd.strip(), count=1, flags=re.IGNORECASE)
+                    nome_livro = nome_produto.split('-', 1)[0].strip()
                     isbn = prod.find('nfe:cEAN', ns).text if prod.find('nfe:cEAN', ns) is not None else "N/A"
+
+                    # Mantém o título já cadastrado quando o ISBN da nota existir no banco.
+                    if isbn and isbn != "N/A" and isbn.upper() != "SEM GTIN":
+                        livro_cadastrado = self.livro.buscar_exato_isbn(isbn.strip())
+                        if livro_cadastrado and livro_cadastrado[1]:
+                            nome_livro = livro_cadastrado[1]
 
                     qtd = float(prod.find('nfe:qCom', ns).text)
                     v_unit_bruto = float(prod.find('nfe:vUnCom', ns).text)
